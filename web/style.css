@@ -1,0 +1,105 @@
+:root{--bg:#070F1A;--panel:#0E1B2B;--panel2:#12263C;--line:#1F344C;--line2:#2A4262;--ink:#EAF0F7;--mute:#8FA6BE;--soft:#C5D3E3;--gold:#C9A24B;--red:#B8322A;--teal:#1C8196;--felt1:#14577F;--felt2:#0A324F;color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--ink);font-family:'Barlow Condensed','Zen Kaku Gothic New','Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;letter-spacing:.02em;-webkit-font-smoothing:antialiased;-webkit-tap-highlight-color:transparent}
+button{font-family:inherit;cursor:pointer}
+button:disabled{cursor:default}
+input,select,textarea{font-family:inherit;font-size:16px;color:var(--ink);background:#0A1626;border:1px solid var(--line2);border-radius:2px;padding:10px 12px;width:100%}
+input:focus,select:focus,textarea:focus,button:focus-visible{outline:2px solid var(--gold);outline-offset:1px}
+label{display:block;font-size:12px;font-weight:600;letter-spacing:.14em;color:var(--mute);margin:12px 0 4px}
+label small{font-weight:400;letter-spacing:.02em}
+#toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);opacity:0;pointer-events:none;background:#0B1726;border:1px solid var(--gold);color:var(--ink);padding:10px 16px;border-radius:2px;font-size:14px;max-width:88vw;z-index:999;transition:.2s}
+#toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.err{border-color:var(--red)}
+.page{max-width:520px;margin:0 auto;padding:0 16px 96px}
+.top{display:flex;align-items:center;justify-content:space-between;height:56px}
+.brand{font-size:22px;font-weight:700;letter-spacing:.4em}
+.brand small{display:block;font-size:10px;font-weight:400;letter-spacing:.2em;color:var(--mute)}
+.card{border:1px solid var(--line2);background:var(--panel);border-radius:2px;padding:14px;margin:12px 0}
+.card h3{margin:0 0 8px;font-size:15px;font-weight:600;letter-spacing:.2em}
+.card h3 small{font-weight:400;letter-spacing:.04em;color:var(--mute);margin-left:8px;font-size:11px}
+.pocket{display:flex;align-items:baseline;justify-content:space-between}
+.pocket .n{font-size:40px;font-weight:600;color:var(--gold);line-height:1}
+.mute{color:var(--mute);font-size:12px;line-height:1.6}
+.row{display:flex;gap:8px;align-items:center}
+.row>*{min-width:0}
+.btn{height:44px;padding:0 16px;border:1px solid var(--line2);border-radius:2px;background:#112238;color:var(--soft);font-size:15px;font-weight:600;letter-spacing:.14em;display:inline-flex;align-items:center;justify-content:center;gap:6px;line-height:1.1;text-align:center}
+.btn small{display:block;font-size:10px;font-weight:400;letter-spacing:.04em}
+.btn.gold{background:var(--gold);color:#0B1522;border-color:var(--gold)}
+.btn.red{background:var(--red);color:#fff;border-color:var(--red)}
+.btn.teal{background:var(--teal);color:#fff;border-color:var(--teal)}
+.btn.sm{height:32px;padding:0 10px;font-size:12px}
+.btn.block{width:100%}
+.btn:disabled{opacity:.4}
+.tabs{position:fixed;left:0;right:0;bottom:0;background:#0A1626;border-top:1px solid var(--line2);display:flex;justify-content:center;z-index:50;padding-bottom:env(safe-area-inset-bottom)}
+.tabs-in{display:flex;width:100%;max-width:520px}
+.tabs button{flex:1;height:56px;border:0;background:none;color:var(--mute);font-size:13px;font-weight:600;letter-spacing:.14em;line-height:1.1;position:relative}
+.tabs button small{display:block;font-size:10px;font-weight:400;letter-spacing:.02em}
+.tabs button.on{color:var(--gold);box-shadow:inset 0 2px 0 var(--gold)}
+.tabs .dot{position:absolute;top:8px;right:22%;width:8px;height:8px;border-radius:50%;background:var(--red)}
+table.t{width:100%;border-collapse:collapse;font-size:14px}
+table.t th{font-size:11px;font-weight:600;letter-spacing:.14em;color:var(--mute);text-align:left;padding:6px 4px;border-bottom:1px solid var(--line2)}
+table.t td{padding:8px 4px;border-bottom:1px solid var(--line);vertical-align:middle}
+table.t td.r,table.t th.r{text-align:right}
+.gold{color:var(--gold)}.redc{color:#E0594E}.tealc{color:#4FB3C8}
+.pill{display:inline-block;padding:0 8px;height:20px;line-height:20px;font-size:11px;font-weight:600;letter-spacing:.1em;border:1px solid var(--line2);border-radius:2px;color:var(--soft)}
+.pill.gold{border-color:var(--gold);color:var(--gold)}.pill.red{border-color:var(--red);color:#E0594E}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hr{height:1px;background:var(--line);margin:12px 0}
+.big{font-size:34px;font-weight:600;letter-spacing:.2em;color:var(--gold)}
+.tbl-item{display:flex;align-items:center;gap:10px;padding:12px 0;border-top:1px solid var(--line)}
+.tbl-item:first-of-type{border-top:0}
+.tbl-item .nm{flex:1;min-width:0}
+.tbl-item .nm b{display:block;font-size:16px;font-weight:600;letter-spacing:.08em}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chips button{height:34px;padding:0 12px;border:1px solid var(--line2);background:transparent;color:var(--soft);border-radius:2px;font-size:13px;font-weight:600;letter-spacing:.06em}
+.chips button.on{border-color:var(--gold);color:var(--gold)}
+.auth{max-width:380px;margin:0 auto;padding:40px 20px}
+.logo{text-align:center;margin-bottom:24px}
+.logo b{display:block;font-size:44px;font-weight:700;letter-spacing:.5em;text-indent:.5em}
+.logo span{font-size:12px;letter-spacing:.3em;color:var(--mute)}
+.warn{padding:10px 12px;border:1px solid var(--red);background:rgba(184,50,42,.12);font-size:12px;line-height:1.6;border-radius:2px;color:#F0B7B2}
+.note{padding:10px 12px;background:#14263A;font-size:12px;line-height:1.6;color:#9FB4CC;border-radius:2px}
+/* ===== 卓の画面 ===== */
+.stagewrap{position:fixed;inset:0;background:var(--bg);overflow:hidden;display:flex;align-items:flex-start;justify-content:center}
+.stage{width:390px;height:844px;position:relative;transform-origin:top left;flex:none;font-family:inherit;overflow:hidden}
+.stage .act{cursor:pointer;transition:transform .08s}
+.stage .act:active{transform:scale(.97)}
+.vr{-webkit-appearance:none;appearance:none;writing-mode:vertical-lr;direction:rtl;width:44px;height:300px;background:transparent;margin:0;padding:0;cursor:pointer;border:0}
+.vr::-webkit-slider-runnable-track{width:8px;border-radius:1px;background:linear-gradient(0deg,#C9A24B,#B8322A)}
+.vr::-webkit-slider-thumb{-webkit-appearance:none;width:44px;height:26px;border-radius:2px;background:linear-gradient(#DDE5EE,#9FB0C3);border:1px solid #5B7391;margin-left:-18px;box-shadow:0 2px 6px rgba(0,0,0,.55)}
+.vr::-moz-range-track{width:8px;border-radius:1px;background:linear-gradient(0deg,#C9A24B,#B8322A)}
+.vr::-moz-range-thumb{width:40px;height:22px;border-radius:2px;background:#DDE5EE;border:1px solid #5B7391}
+.sheet{position:absolute;left:0;right:0;bottom:0;z-index:41;max-height:660px;overflow-y:auto;padding:8px 18px 34px;border-radius:6px 6px 0 0;border-top:1px solid var(--gold);background:#0E1B2B;box-shadow:0 -10px 30px rgba(0,0,0,.6)}
+.sheet .grab{width:40px;height:3px;border-radius:1px;background:#3A5170;margin:0 auto 14px}
+.sheet .menu{width:100%;height:58px;padding:0 4px;border:0;border-bottom:1px solid var(--line);background:none;display:flex;align-items:center;justify-content:space-between;color:var(--ink);text-align:left}
+.sheet .menu b{display:block;font-size:17px;font-weight:600;letter-spacing:.2em}
+.sheet .menu small{display:block;font-size:11px;font-weight:400;color:var(--mute)}
+.sheet .menu i{font-style:normal;color:var(--gold);font-size:20px}
+.sheet input,.sheet select{padding:8px 10px}
+.msgline{padding:6px 0;border-top:1px solid var(--line);font-size:13px;line-height:1.5}
+.msgline b{color:var(--gold);font-weight:600;margin-right:6px}
+
+.dlg{position:fixed;inset:0;z-index:10000;background:#000a;display:flex;align-items:center;justify-content:center;padding:20px}
+.dlg-box{width:100%;max-width:360px;background:var(--panel);border:1px solid var(--gold);border-radius:4px;padding:18px}
+.dlg-msg{white-space:pre-line;line-height:1.7;font-size:15px;margin-bottom:12px;color:var(--ink)}
+.dlg-btns{margin-top:14px;justify-content:flex-end}
+.dlg-btns .btn{flex:1;letter-spacing:.06em}
+
+/* 積立(ジャックポット)の電光掲示: 左から右へ流れて、一周したら左から戻ってくる */
+@keyframes jpflow { from { transform: translateX(-105%); } to { transform: translateX(360px); } }
+@keyframes jpshine { 0%, 100% { opacity: .25; } 50% { opacity: .6; } }
+.jptrack { position: absolute; left: 0; top: 0; height: 100%; display: flex; align-items: center; gap: 8px; white-space: nowrap; color: #FFE08A; font-size: 13px; font-weight: 700; text-shadow: 0 0 8px rgba(255,200,60,.85), 0 1px 0 #5A1008; animation: jpflow 12s linear infinite; will-change: transform; }
+.jpglow { position: absolute; inset: 0; background: radial-gradient(ellipse at 20% 0%, rgba(255,224,138,.5), transparent 55%), radial-gradient(ellipse at 80% 100%, rgba(255,120,60,.4), transparent 55%); animation: jpshine 2.4s ease-in-out infinite; }
+
+/* ジャックポット: 夢のある電光掲示(金の文字・まばたく電球・きらめく星) */
+@keyframes jpblink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: .25; } }
+@keyframes jptwinkle { 0%, 100% { opacity: .15; transform: scale(.6); } 50% { opacity: 1; transform: scale(1.25); } }
+@keyframes jpsheen { from { background-position: 0 0; } to { background-position: 200% 0; } }
+.jpgold { background: linear-gradient(100deg, #B8862B 0%, #FFF1B0 22%, #E8B84A 40%, #FFFFFF 50%, #E8B84A 60%, #FFF1B0 78%, #B8862B 100%); background-size: 200% 100%; -webkit-background-clip: text; background-clip: text; color: transparent; -webkit-text-fill-color: transparent; font-weight: 800; animation: jpsheen 2.6s linear infinite; filter: drop-shadow(0 0 6px rgba(255,200,70,.8)); }
+.jpbulb { position: absolute; left: 0; right: 0; height: 6px; background: radial-gradient(circle, #FFE9A0 0 1.6px, transparent 2.4px) 0 50% / 13px 6px repeat-x; animation: jpblink 1.1s steps(1) infinite; }
+.jpbulb.t { top: 1px; } .jpbulb.b { bottom: 1px; animation-delay: .55s; }
+.jpstar { position: absolute; font-size: 11px; color: #FFF6C8; text-shadow: 0 0 6px #FFD04A; animation: jptwinkle 1.8s ease-in-out infinite; pointer-events: none; }
+.jptrack { gap: 12px !important; }
+/* 勝負の表示 */
+@keyframes sdslam { 0% { transform: scale(3) rotate(-8deg); opacity: 0; } 18% { transform: scale(1) rotate(-4deg); opacity: 1; } 24% { transform: scale(1.12) rotate(-4deg); } 30%, 80% { transform: scale(1) rotate(-4deg); opacity: 1; } 100% { transform: scale(1.3) rotate(-4deg); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .jptrack { animation: none !important; left: 8px; } .jpgold, .jpbulb, .jpstar { animation: none !important; } }

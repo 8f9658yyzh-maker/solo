@@ -1,0 +1,361 @@
+
+(function () {
+  'use strict';
+  const $ = s => document.querySelector(s);
+  const COLOR = { red: '赤', black: '黒' };
+  const PRESETS = {
+    easy: { seats: 4, ante: 1, limit: 3, limitType: 'perBet', maxBets: 3, minBet: 1, reserve: 10, startPts: 100 },
+    std: { seats: 4, ante: 1, limit: 10, limitType: 'perGame', maxBets: 3, minBet: 1, reserve: 10, startPts: 200 },
+    high: { seats: 4, ante: 5, limit: 30, limitType: 'perGame', maxBets: 3, minBet: 5, reserve: 10, startPts: 500 }
+  };
+  const S = { T: null, req: null, resolve: null, amt: 1, up: 0, result: null, panel: null, nextResolve: null, tickets: 2, running: false, loop: 0, log: [], ticketUsed: {} };
+
+  if (typeof Solo === 'undefined') { $('#lobbyErr').textContent = 'エンジンを読み込めませんでした。'; return; }
+
+  /* ---------- 設定フォーム ---------- */
+  function fieldsHtml(p, c, withSeats) {
+    const num = (id, label, val, min, max, hint) =>
+      `<label for="${p}-${id}">${label}<input id="${p}-${id}" type="number" inputmode="numeric" min="${min}" max="${max}" value="${val}"><small>${hint}</small></label>`;
+    return `<div class="grid">
+      ${withSeats ? `<label for="${p}-seats">人数（あなた＋CPU）<select id="${p}-seats">${[2,3,4,5,6,7,8,9,10].map(n => `<option value="${n}"${n === c.seats ? ' selected' : ''}>${n}人</option>`).join('')}</select><small>最大10人まで</small></label>` : ''}
+      ${num('ante', '参加料（pt）', c.ante, 1, 1000, 'ゲームごとに全員が出す')}
+      <label for="${p}-limitType">上限の種類<select id="${p}-limitType"><option value="perBet"${c.limitType === 'perBet' ? ' selected' : ''}>1回のベットごと</option><option value="perGame"${c.limitType === 'perGame' ? ' selected' : ''}>1ゲーム全体</option></select><small>1ゲーム全体なら、1回で上限まで賭けられる</small></label>
+      ${num('limit', '上限（pt）', c.limit, 1, 10000, '親にもビキにも同じ上限')}
+      ${num('maxBets', '親のベット回数', c.maxBets, 1, 5, '親ごとの最大回数')}
+      ${num('minBet', '最低ベット（pt）', c.minBet, 1, 1000, '1回の最小額')}
+      ${num('reserve', '祝儀用に取っておく点', c.reserve, 0, 100, 'この点は賭けに使えない')}
+      ${withSeats ? num('startPts', '持ち点（pt）', c.startPts, 1, 100000, '最初にもらう点') : ''}
+    </div>`;
+  }
+  function readFields(p, withSeats) {
+    const g = id => document.getElementById(p + '-' + id);
+    const c = { ante: +g('ante').value, limit: +g('limit').value, limitType: g('limitType').value, maxBets: +g('maxBets').value, minBet: +g('minBet').value, reserve: +g('reserve').value };
+    if (withSeats) { c.seats = +g('seats').value; c.startPts = +g('startPts').value; }
+    return c;
+  }
+  function fillLobby(c) { $('#lobbyFields').innerHTML = fieldsHtml('f', c, true); }
+
+  /* ---------- カードの描画 ---------- */
+  function cardHtml(c, cls) {
+    const red = c.s === '♥' || c.s === '♦';
+    return `<div class="card ${red ? 'red' : 'blk'} ${cls || ''}"><i class="cs tl">${c.s}</i><span class="cn">${c.n}</span><i class="cs br">${c.s}</i></div>`;
+  }
+  const backHtml = cls => `<div class="card back ${cls || ''}"></div>`;
+  const nm = s => S.T.players[s].name;
+  const avail = s => Math.max(0, S.T.players[s].pts - S.T.cfg.reserve);
+
+  /* ---------- 描画 ---------- */
+  function render() {
+    if (!S.T) return;
+    renderTop(); renderSeats(); renderHand(); renderActions(); renderResult(); renderLog(); renderFairNow();
+  }
+  function renderTop() {
+    const T = S.T, g = T.g;
+    const col = (g && g.phase !== 'done') ? g.color : T.color;
+    const pill = $('#deckPill'); pill.hidden = false;
+    pill.innerHTML = `<span class="sw ${col}"></span>${COLOR[col]}の山札` + (g ? ` ・ ゲーム${g.no}` : '');
+    $('#potNum').textContent = T.pot;
+    const info = [];
+    if (g && g.carried > 0) info.push(`前の流しの ${g.carried}pt を含む`);
+    if (g && g.phase === 'bet') {
+      info.push(`親のベット ${g.epoch.bets}/${T.cfg.maxBets}回`);
+      info.push(T.cfg.limitType === 'perBet' ? `上限 1回${T.cfg.limit}pt` : `上限 1ゲーム${T.cfg.limit}pt（親 ${g.epoch.total}・ビキ ${g.bikiE.total}）`);
+    }
+    $('#potInfo').innerHTML = info.map(x => `<span>${x}</span>`).join('');
+  }
+  function seatHtml(s) {
+    const T = S.T, g = T.g, p = T.players[s];
+    const inG = !!g && g.parts.includes(s), alive = inG && g.active.has(s), done = !!g && g.phase === 'done';
+    const R = (g && alive && !done) ? Solo.ring(T, g) : [];
+    let cls = 'seat' + (s === 0 ? ' me' : ''), bd = '', st = '', minis = '';
+    if (g && !done && alive && g.oya === s) bd += '<b class="bd oya">親</b>';
+    if (g && !done && R.length >= 2 && R[R.length - 1] === s) bd += '<b class="bd biki">ビキ</b>';
+    if (done && g.result && g.result.type === 'win' && g.result.winner === s) bd += '<b class="bd win">勝ち</b>';
+    if (g && g.acting === s) cls += ' acting';
+    if (!g) st = '<span>待機中</span>';
+    else if (!inG) { cls += ' out'; st = '<span>不参加</span>'; }
+    else {
+      if (!alive) cls += ' folded';
+      const say = !alive ? '降り' : (g.say[s] || (done ? '' : '参加中'));
+      st = `<span>${say}</span><span>場に ${g.paid[s]}pt</span>`;
+      if (done && g.result && g.result.deltas[s] !== undefined) {
+        const d = g.result.deltas[s];
+        st = `<span>${say}</span><span class="${d >= 0 ? 'up' : 'dn'}">${d >= 0 ? '+' : '−'}${Math.abs(d)}pt</span>`;
+      }
+      const revealed = g.revealed && g.revealed.includes(s);
+      if (revealed) minis = `<div class="minis">${cardHtml(g.hands[s][0], 'mini')}${cardHtml(g.hands[s][1], 'mini')}</div>`;
+      else if (alive && !done && s !== 0) minis = `<div class="minis">${backHtml('mini')}${backHtml('mini')}</div>`;
+    }
+    return `<div class="${cls}"><div class="nm">${p.name}${bd}</div><div class="pts">${p.pts}<small>pt</small></div><div class="st">${st}</div>${minis}</div>`;
+  }
+  function renderSeats() {
+    $('#seats').innerHTML = S.T.players.map((_, s) => seatHtml(s)).join('');
+    const last = S.log[0];
+    $('#say').textContent = last ? last.m : '';
+  }
+  function renderHand() {
+    const T = S.T, g = T.g, el = $('#hand');
+    if (!g) { el.innerHTML = ''; return; }
+    if (!g.parts.includes(0)) { el.innerHTML = '<p class="muted">今回はポイントが足りないので、観戦しています。</p>'; return; }
+    const h = g.hands[0], ev = g.ev[0], sum = h[0].n + h[1].n, folded = !g.active.has(0);
+    const desc = {
+      solo: '同じ数字2枚。ソロは祝儀もあります', pin: 'ピン。どの点数よりも強い役です',
+      nagashi: '10のソロ以外には勝ちも負けもしません', buta: '誰にも勝てません', point: '足して10を引いた点数'
+    }[ev.kind];
+    el.innerHTML = `<div class="handrow"><div class="cards">${cardHtml(h[0], 'big' + (folded ? ' dim' : ''))}${cardHtml(h[1], 'big' + (folded ? ' dim' : ''))}</div>
+      <div class="handinfo"><div class="hl">${ev.label}</div><div class="hs">${h[0].n} + ${h[1].n} = ${sum}${sum >= 10 ? ' → ' + (sum % 10) + '点' : ''}</div><div class="hs">${folded ? '降りました' : desc}</div></div></div>`;
+  }
+
+  /* ---------- 操作 ---------- */
+  function stepper(idOut, idRange, lo, hi, val, key) {
+    if (hi <= lo) return `<div class="amt"><output id="${idOut}">${val}</output><span>pt</span></div>`;
+    return `<div class="amt"><button class="btn" data-act="amt" data-k="${key}" data-d="-1" aria-label="1減らす">−</button>
+      <input id="${idRange}" type="range" min="${lo}" max="${hi}" value="${val}" aria-label="金額">
+      <button class="btn" data-act="amt" data-k="${key}" data-d="1" aria-label="1増やす">＋</button><output id="${idOut}">${val}</output><span>pt</span></div>
+      <div class="chips"><button class="chip" data-act="amt" data-k="${key}" data-d="min">${key === 'up' ? 'なし' : '最低'}</button><button class="chip" data-act="amt" data-k="${key}" data-d="half">半分</button><button class="chip" data-act="amt" data-k="${key}" data-d="max">上限</button></div>`;
+  }
+  function renderActions() {
+    const q = S.req, el = $('#actions'), T = S.T;
+    if (!q) { el.innerHTML = ''; return; }
+    const me = `<small>あなたの持ち点 ${T.players[0].pts}pt（賭けに使えるのは ${avail(0)}pt）</small>`;
+    let h = '';
+    if (q.type === 'oya') {
+      const lim = T.cfg.limitType === 'perBet' ? `1回 ${T.cfg.limit}pt まで` : `1ゲーム合計 ${T.cfg.limit}pt まで（使用済み ${q.epochTotal}pt）`;
+      h += `<p class="prompt"><b>あなたは親です。</b>${q.canBet ? 'ベットするか、降りるかを選びます。' : 'ポイントが足りず、ベットできません。'}${q.canShow ? '残りが2人なので、ベットせずに勝負することもできます。' : ''}<br><small>親のベットはあと ${q.betsLeft}回 ・ ${lim}</small></p>`;
+      if (q.canBet) h += stepper('amtOut', 'amtRange', q.minBet, q.cap, S.amt, 'amt');
+      h += '<div class="row">' + (q.canBet ? `<button class="btn primary" data-act="bet" id="betBtn">${S.amt}pt ベットする</button>` : '') +
+        (q.canShow ? '<button class="btn" data-act="show">勝負する</button>' : '') + '<button class="btn" data-act="fold">降りる</button></div>';
+    } else if (q.type === 'follow') {
+      h += `<p class="prompt"><b>${nm(q.from)}（親）が ${q.amount}pt ベットしました。</b>ついていくと ${q.amount}pt 払います。</p>` +
+        `<div class="row"><button class="btn primary" data-act="follow">ついていく（${q.amount}pt）</button><button class="btn" data-act="fold">降りる</button></div>`;
+    } else if (q.type === 'followUp') {
+      h += `<p class="prompt"><b>ビキの ${nm(q.from)} が ${q.amount}pt アップしました。</b>ついていくにはさらに ${q.amount}pt。降りると、ここまでに出した分は戻りません。</p>` +
+        `<div class="row"><button class="btn primary" data-act="follow">アップについていく（${q.amount}pt）</button><button class="btn" data-act="fold">降りる</button></div>`;
+    } else if (q.type === 'biki') {
+      h += `<p class="prompt"><b>あなたはビキです。</b>親のベット ${q.amount}pt についていき、さらに上乗せ（アップ）できます。アップには、全員が払うか降りるかを選びます。${q.upCap > 0 ? `<br><small>アップは ${q.minUp}〜${q.upCap}pt</small>` : '<br><small>アップに使えるポイントがありません</small>'}</p>`;
+      if (q.upCap > 0) h += stepper('upOut', 'upRange', q.minUp, q.upCap, S.up, 'up');
+      h += `<div class="row"><button class="btn primary" data-act="bfollow" id="bikiBtn">${bikiLabel(q)}</button><button class="btn" data-act="fold">降りる</button></div>`;
+    }
+    el.innerHTML = h + me;
+  }
+  const bikiLabel = q => S.up >= q.minUp ? `ついていく＋${S.up}pt アップ（合計 ${q.amount + S.up}pt）` : `ついていく（${q.amount}pt）`;
+  function syncStepper(k) {
+    const q = S.req; if (!q) return;
+    const lo = k === 'up' ? q.minUp : q.minBet, hi = k === 'up' ? q.upCap : q.cap;
+    const v = S[k === 'up' ? 'up' : 'amt'];
+    const out = document.getElementById(k === 'up' ? 'upOut' : 'amtOut'), rg = document.getElementById(k === 'up' ? 'upRange' : 'amtRange');
+    if (out) out.textContent = v; if (rg) rg.value = v;
+    const b = document.getElementById(k === 'up' ? 'bikiBtn' : 'betBtn');
+    if (b) b.textContent = k === 'up' ? bikiLabel(q) : `${v}pt ベットする`;
+  }
+  function setAmt(k, v) {
+    const q = S.req; if (!q) return;
+    if (k === 'up') { v = Math.max(0, Math.min(q.upCap, Math.round(v))); if (v > 0 && v < q.minUp) v = q.minUp; S.up = v; }
+    else { S.amt = Math.max(q.minBet, Math.min(q.cap, Math.round(v))); }
+    syncStepper(k);
+  }
+  function answer(a) {
+    const r = S.resolve; S.req = null; S.resolve = null; renderActions();
+    if (r) r(a);
+  }
+
+  /* ---------- 結果 ---------- */
+  function dealHtml(g) {
+    return g.commit.order.map(s => `${nm(s)}：${g.hands[s][0].n}${g.hands[s][0].s} ${g.hands[s][1].n}${g.hands[s][1].s}（${g.ev[s].label}）`).join('<br>');
+  }
+  function verifyBlock(h) {
+    return `<details class="doc"><summary>山札を答え合わせする</summary><div class="body">
+      <p style="font-size:13px">配る前に出した指紋と、いま公開する並びから計算した指紋が一致すれば、配ったあとに差し替えていないことが分かります。下の「検証用の文字列」を、ほかのSHA-256ツールに貼っても同じ値になります。</p>
+      <small>配る前に出した指紋</small><code>${h.hash}</code>
+      <small>配られた手札（親から順）</small><div style="font-size:13px">${h.dealHtml}</div>
+      <small>検証用の文字列</small><code>${h.str}</code>
+      <div class="row"><button class="btn small" data-act="verify" data-no="${h.no}">計算し直して照合する</button><button class="btn small" data-act="copy" data-no="${h.no}">文字列をコピー</button></div>
+      <div id="vr-${h.no}" aria-live="polite"></div></div></details>`;
+  }
+  function resultHtml() {
+    const r = S.result, g = r.g, T = S.T;
+    const entry = { no: g.no, hash: g.commit.hash, str: g.commit.str, dealHtml: dealHtml(g) };
+    let h = '<div class="panel res">';
+    if (r.type === 'win') {
+      h += `<h2>${nm(r.winner)}の勝ち　+${r.potWon}pt</h2>`;
+      if (r.how === 'fold') {
+        h += `<p>全員が降りたので、手札は見せません。</p>`;
+        if (r.winner === 0) h += `<p class="note">あなたの手札は、見せなくて大丈夫です。</p>`;
+        else if (S.ticketUsed[g.no]) {
+          const hv = g.hands[r.winner];
+          h += `<div class="hr w">${nm(r.winner)}の手札<span class="cards" style="display:flex;gap:4px">${cardHtml(hv[0], 'mini')}${cardHtml(hv[1], 'mini')}</span>${g.ev[r.winner].label}</div><p class="note">チケットで、勝者の手札だけを見ています。このゲームの山札の答え合わせは、卓を離れるときにまとめてできます。</p>`;
+        } else {
+          h += `<div class="ad"><span>ハッタリかどうか、勝者の手札をチケットで見られます。</span><div class="row"><button class="btn small" data-act="use-ticket" ${S.tickets < 1 ? 'disabled' : ''}>チケットで見る（残り ${S.tickets}枚）</button><button class="btn small" data-act="ad-ticket">広告を見てチケットをもらう（デモ）</button></div></div>`;
+        }
+      } else {
+        h += '<div class="hands">' + g.revealed.map(s => `<div class="hr ${s === r.winner ? 'w' : ''}"><span style="min-width:4.5em">${nm(s)}</span><span class="cards">${cardHtml(g.hands[s][0], 'mini')}${cardHtml(g.hands[s][1], 'mini')}</span><span>${g.ev[s].label}</span></div>`).join('') + '</div>';
+        if (r.shugi) h += `<p class="note">${r.hand.label}の祝儀：他の${r.shugi.items.length}人から ${r.shugi.rank}pt ずつ、合計 ${r.shugi.total}pt。</p>`;
+        if (r.flipped) h += `<p class="note">10のソロが出たので、次のゲームから山札は<b>${COLOR[T.color]}</b>になります。</p>`;
+      }
+    } else {
+      const why = r.reason === 'sixfour' ? '6と4が出たので、勝負はつきません。' : '同じ強さで、勝負がつきません。';
+      h += `<h2>流し</h2><p>${why}</p><div class="hands">` + g.revealed.map(s => `<div class="hr"><span style="min-width:4.5em">${nm(s)}</span><span class="cards">${cardHtml(g.hands[s][0], 'mini')}${cardHtml(g.hands[s][1], 'mini')}</span><span>${g.ev[s].label}</span></div>`).join('') + '</div>' +
+        `<p class="note">場の ${r.carry}pt は次のゲームに持ち越します。次の親は ${nm(r.nextOya)}。降りた人が次のゲームに入るには、${r.fee}pt（1人分＋10%）が必要です。</p>`;
+    }
+    h += '<div class="deltas">' + g.parts.map(s => `<span>${nm(s)} <b class="${r.deltas[s] >= 0 ? 'up' : 'dn'}">${r.deltas[s] >= 0 ? '+' : '−'}${Math.abs(r.deltas[s])}</b></span>`).join('') + '</div>';
+    if (r.how !== 'fold') h += verifyBlock(entry);
+    if (!g.parts.includes(0)) h += `<div class="ad"><span>ポイントが足りず、今回は不参加でした。</span><button class="btn small" data-act="ad-points">広告を見て 50pt もらう（デモ）</button></div>`;
+    h += `<div class="row"><button class="btn primary" data-act="next">次のゲームへ</button><button class="btn" data-act="leave">卓を離れる</button></div>`;
+    h += `<details class="doc"><summary>卓の設定を変える（次のゲームから）</summary><div class="body">${fieldsHtml('n', T.cfg, false)}<button class="btn small" data-act="apply">設定を保存する</button><small id="applyMsg" aria-live="polite"></small></div></details>`;
+    return h + '</div>';
+  }
+  function noGameHtml() {
+    return `<div class="panel res"><h2>ポイントが足りません</h2><p>参加料と、取っておく点の合計に届かないので、このゲームには入れません。</p>
+      <div class="ad"><span>ポイントを補充します。</span><button class="btn small" data-act="ad-points">広告を見て 50pt もらう（デモ）</button></div>
+      <div class="row"><button class="btn primary" data-act="next">もう一度ためす</button><button class="btn" data-act="leave">卓を離れる</button></div></div>`;
+  }
+  function renderResult() {
+    const el = $('#result');
+    if (S.panel === 'result' && S.result) el.innerHTML = resultHtml();
+    else if (S.panel === 'nogame') el.innerHTML = noGameHtml();
+    else el.innerHTML = '';
+  }
+  function renderLog() {
+    $('#log').innerHTML = S.log.slice(0, 60).map(x => `<li class="${x.k}">${x.m}</li>`).join('');
+  }
+  function renderFairNow() { /* 今のゲームの指紋は、ログに出しています */ }
+
+  /* ---------- 終了画面 ---------- */
+  function showEnd() {
+    const T = S.T;
+    $('#table').hidden = true; $('#end').hidden = false; $('#deckPill').hidden = true;
+    const how = { fold: '全員降り', show: '勝負', nagashi: '流し' };
+    const rows = T.history.map(h => {
+      const okv = Solo.sha256hex(h.str) === h.hash;
+      const deal = Object.keys(h.hands).map(Number).sort((a, b) => a - b).map(s => `${T.players[s].name} ${h.hands[s][0].n}${h.hands[s][0].s} ${h.hands[s][1].n}${h.hands[s][1].s}`).join(' ／ ');
+      return `<tr><td class="num">${h.no}</td><td>${COLOR[h.color]}</td><td>${how[h.how]}</td><td><code>${h.hash.slice(0, 10)}…</code></td><td class="${okv ? 'ok' : 'ng'}">${okv ? '一致' : '不一致'}</td></tr><tr><td colspan="5" style="white-space:normal;color:var(--muted);font-size:12px">${deal}</td></tr>`;
+    }).join('');
+    const pts = T.players.map(p => `<tr><td>${p.name}</td><td class="num">${p.pts}pt</td></tr>`).join('');
+    $('#end').innerHTML = `<h2 style="font-size:18px">卓を離れました</h2>
+      <p class="muted" style="font-size:13px">全${T.history.length}ゲームの山札を公開して、配る前に出した指紋と照合しました。全員が降りたゲームの手札も、ここで確かめられます。</p>
+      <div class="tbl"><table><thead><tr><th class="num">ゲーム</th><th>山札</th><th>決着</th><th>指紋</th><th>照合</th></tr></thead><tbody>${rows || '<tr><td colspan="5">まだゲームをしていません</td></tr>'}</tbody></table></div>
+      <h3 style="font-size:14px;color:var(--gold)">最後の持ち点</h3><div class="tbl"><table><tbody>${pts}</tbody></table></div>
+      <button class="btn primary" data-act="again">設定にもどる</button>`;
+  }
+
+  /* ---------- ゲームの進行 ---------- */
+  const io = {
+    log(m, k) { S.log.unshift({ m, k }); if (S.log.length > 200) S.log.length = 200; renderLog(); const e = $('#say'); if (e) e.textContent = m; },
+    sync() { render(); },
+    beat(ms) {
+      const g = S.T && S.T.g, fast = !g || !g.parts.includes(0) || !g.active.has(0);
+      return new Promise(r => setTimeout(r, fast ? ms * 0.35 : ms));
+    },
+    human(req) {
+      return new Promise(res => {
+        S.req = req; S.resolve = res;
+        if (req.type === 'oya') S.amt = req.minBet;
+        if (req.type === 'biki') S.up = 0;
+        renderActions();
+        const a = $('#actions'); if (a && a.scrollIntoView) a.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      });
+    }
+  };
+  async function runLoop(id) {
+    const T = S.T;
+    while (S.running && S.loop === id) {
+      S.panel = null; S.result = null; render();
+      const r = await Solo.playGame(T, io);
+      if (!S.running || S.loop !== id) return;
+      if (r.type === 'nogame') { S.panel = 'nogame'; render(); await new Promise(res => { S.nextResolve = res; }); continue; }
+      S.result = r; S.panel = 'result'; render();
+      const rs = $('#result'); if (rs && rs.scrollIntoView) rs.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      await new Promise(res => { S.nextResolve = res; });
+    }
+  }
+  function startTable() {
+    try {
+      const cfg = Solo.normalizeCfg(readFields('f', true));
+      S.T = Solo.createTable(cfg); S.log = []; S.ticketUsed = {}; S.result = null; S.panel = null; S.req = null;
+      S.running = true; S.loop++;
+      $('#lobby').hidden = true; $('#end').hidden = true; $('#table').hidden = false;
+      io.log(`卓ができました。${cfg.seats}人 ・ 参加料${cfg.ante}pt ・ 上限${cfg.limit}pt（${cfg.limitType === 'perBet' ? '1回ごと' : '1ゲーム全体'}） ・ 持ち点${cfg.startPts}pt`, 'info');
+      render();
+      runLoop(S.loop);
+    } catch (e) { $('#lobbyErr').textContent = '始められませんでした：' + e.message; }
+  }
+  function nextGame() { const r = S.nextResolve; S.nextResolve = null; if (r) r(); }
+  function leave() {
+    S.running = false; S.loop++;
+    if (S.resolve) { const r = S.resolve; S.resolve = null; S.req = null; r({ act: 'fold' }); }
+    nextGame(); showEnd();
+  }
+
+  /* ---------- 公平性テスト ---------- */
+  function runFairTest() {
+    const out = $('#fairOut'); out.textContent = '計算中…';
+    setTimeout(() => {
+      const N = 20000, theory = Solo.categoryProbabilities(), obs = {}, deck = Solo.makeDeck('red');
+      for (let i = 0; i < N; i++) { const d = Solo.shuffle(deck); const c = Solo.category(d[0].n, d[1].n); obs[c] = (obs[c] || 0) + 1; }
+      const keys = Object.keys(theory).sort((a, b) => theory[b] - theory[a]);
+      let maxz = 0;
+      const rows = keys.map(k => {
+        const p = theory[k], o = (obs[k] || 0), z = (o - N * p) / Math.sqrt(N * p * (1 - p));
+        maxz = Math.max(maxz, Math.abs(z));
+        return `<tr><td>${k}</td><td class="num">${(p * 100).toFixed(2)}%</td><td class="num">${(o / N * 100).toFixed(2)}%</td><td class="num">${z >= 0 ? '+' : '−'}${Math.abs(z).toFixed(1)}</td></tr>`;
+      }).join('');
+      const good = maxz < 4;
+      out.innerHTML = `<div class="tbl"><table><thead><tr><th>手札</th><th class="num">理論値</th><th class="num">実測</th><th class="num">ずれ(σ)</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <p class="${good ? 'ok' : 'ng'}" style="font-size:13px;margin-top:8px">${N.toLocaleString('ja-JP')}回配って、最大のずれは ${maxz.toFixed(1)}σでした。${good ? '4σ未満なので、偏りは見つかりませんでした。' : '4σ以上のずれがあります。もう一度試してください。'}</p>
+        <small>理論値は、20枚から2枚を選ぶ190通りを数えた値です。σは、偶然で起こる誤差の大きさを1とした単位です。</small>`;
+    }, 30);
+  }
+
+  /* ---------- イベント ---------- */
+  document.addEventListener('click', e => {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const a = b.dataset.act;
+    if (a === 'preset') { fillLobby(PRESETS[b.dataset.p]); }
+    else if (a === 'start') startTable();
+    else if (a === 'bet') answer({ act: 'bet', amount: S.amt });
+    else if (a === 'fold') answer({ act: 'fold' });
+    else if (a === 'show') answer({ act: 'show' });
+    else if (a === 'follow') answer({ act: 'follow' });
+    else if (a === 'bfollow') answer({ act: 'follow', up: S.up });
+    else if (a === 'amt') {
+      const k = b.dataset.k, q = S.req; if (!q) return;
+      const lo = k === 'up' ? q.minUp : q.minBet, hi = k === 'up' ? q.upCap : q.cap, cur = k === 'up' ? S.up : S.amt, d = b.dataset.d;
+      let v = cur;
+      if (d === 'min') v = k === 'up' ? 0 : lo; else if (d === 'max') v = hi; else if (d === 'half') v = Math.round((lo + hi) / 2); else v = cur + Number(d);
+      if (k === 'up' && d === '-1' && cur <= lo) v = 0;
+      setAmt(k, v);
+    }
+    else if (a === 'next') nextGame();
+    else if (a === 'leave') leave();
+    else if (a === 'again') { $('#end').hidden = true; $('#lobby').hidden = false; S.T = null; }
+    else if (a === 'ad-points') { S.T.players[0].pts += 50; S.T.injected += 50; io.log('デモ：50pt を補充しました（実際の広告は出ません）', 'info'); render(); }
+    else if (a === 'ad-ticket') { S.tickets++; io.log('デモ：チケットを1枚もらいました（実際の広告は出ません）', 'info'); render(); }
+    else if (a === 'use-ticket') { const g = S.T.g; if (S.tickets > 0 && g) { S.tickets--; S.ticketUsed[g.no] = true; render(); } }
+    else if (a === 'apply') {
+      try {
+        const c = Object.assign({}, S.T.cfg, readFields('n', false)); const nc = Solo.normalizeCfg(c);
+        nc.seats = S.T.cfg.seats; nc.startPts = S.T.cfg.startPts; Object.assign(S.T.cfg, nc);
+        const m = $('#applyMsg'); if (m) m.textContent = '次のゲームから、この設定になります。';
+      } catch (err) { const m = $('#applyMsg'); if (m) m.textContent = '保存できませんでした：' + err.message; }
+    }
+    else if (a === 'fair-test') runFairTest();
+    else if (a === 'verify') {
+      const h = S.T.history.find(x => x.no === Number(b.dataset.no)) || (S.result && { no: S.result.g.no, hash: S.result.g.commit.hash, str: S.result.g.commit.str });
+      const el = document.getElementById('vr-' + b.dataset.no); if (!h || !el) return;
+      const calc = Solo.sha256hex(h.str), ok = calc === h.hash;
+      el.innerHTML = `<p class="${ok ? 'ok' : 'ng'}" style="font-size:13px">${ok ? '一致しました。配る前に出した指紋と同じです。' : '一致しません。'}</p><code>${calc}</code>`;
+    }
+    else if (a === 'copy') {
+      const h = S.T.history.find(x => x.no === Number(b.dataset.no)); if (!h) return;
+      const done = () => { b.textContent = 'コピーしました'; };
+      try { navigator.clipboard.writeText(h.str).then(done, () => { b.textContent = '長押しで選んでコピーしてください'; }); } catch (err) { b.textContent = '長押しで選んでコピーしてください'; }
+    }
+  });
+  document.addEventListener('input', e => {
+    const t = e.target;
+    if (t.id === 'amtRange') { S.amt = Number(t.value); syncStepper('amt'); }
+    else if (t.id === 'upRange') { setAmt('up', Number(t.value)); }
+  });
+
+  fillLobby(PRESETS.easy);
+})();
