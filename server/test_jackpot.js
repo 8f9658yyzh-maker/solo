@@ -123,6 +123,8 @@ const total = T => T.players.reduce((a, p) => a + p.pts, 0) + T.pot + T.jp.pool 
     const W = world(), c = W.c, aj = c.user(W.aj);
     W.T.opt.jackpotBp = 200; W.T.opt.feeBp = 100;
     const mkTable = async (name, extra) => {
+      // 前の卓でボットを止めたあと「チップ不足で戻らない」が数えられ、タイミングしだいで3回目の自動退会になることがあった。卓ごとに数え直す
+      c.db.prepare("DELETE FROM suspicion WHERE kind LIKE 'nuisance:%'").run();
       for (const u of W.ps.slice(0, 3)) if (c.pocket(u) < 20000) c.give(c.user(W.aj), u, 20000 - c.pocket(u));
       const t = W.T.create(aj, name, Object.assign({ seats: 6, ante: 100, minBet: 100, limit: 1000, startMode: 'free' }, extra || {}));
       const rt = W.T.get(t.id); const bots = [];
