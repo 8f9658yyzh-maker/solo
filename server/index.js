@@ -16,7 +16,36 @@ function createApp(opts) {
   const limited = (key, max, ms) => { const now = Date.now(); const a = (hits.get(key) || []).filter(t => t > now - ms); a.push(now); hits.set(key, a); return a.length > max; };
   const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
-  const clientIp = req => (trustProxy && req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress) || '';
+  // 中継の後ろでは、中継が書いた値だけを信じる。X-Forwarded-For の先頭は利用者が自由に書けるので使わない(使うとIPの締め出し・回数制限をすり抜けられる)
+  const clientIp = req => {
+    if (trustProxy) {
+      if (req.headers['fly-client-ip']) return String(req.headers['fly-client-ip']).trim();
+      if (req.headers['x-forwarded-for']) { const a = String(req.headers['x-forwarded-for']).split(',').map(x => x.trim()).filter(Boolean); if (a.length) return a[a.length - 1]; }
+    }
+    return req.socket.remoteAddress || '';
+  };
+  // ---- 健康診断(見張りプログラムが5分ごとに見る) ----
+  const mon = { errors500: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
+  const recent = (arr, ms, now) => arr.filter(t => t > now - ms).length;
+  let healthCache = null;
+  function health(now = Date.now()) {
+    if (healthCache && healthCache.at > now - 15000) return healthCache.body;   // 15秒は同じ答え(何度も開かれても台帳の検査を繰り返さない)
+    const c = core.L.check(), alarm = [], warn = [];
+    if (!c.ok) alarm.push('ledger');   // チップの合計が発行量と合わない・マイナスの口座がある
+    const e500 = recent(mon.errors500, 600000, now); if (e500 >= 10) alarm.push('errors500'); else if (e500 > 0) warn.push('errors500');
+    const te = recent(tables.tableErrors, 3600000, now); if (te >= 3) alarm.push('tableErrors'); else if (te > 0) warn.push('tableErrors');
+    const stuck = tables.stalled(Math.max(tables.opt.graceMs, tables.opt.turnMs) + 120000, now); if (stuck) alarm.push('stalledTables');
+    if (mon.uncaught) alarm.push('uncaught');
+    let backupAgeMin = null;
+    if (mon.lastBackupOk != null) { backupAgeMin = Math.floor((now - mon.lastBackupOk) / 60000); if (backupAgeMin > 360) alarm.push('backup'); else if (backupAgeMin > 120) warn.push('backup'); }
+    else if (mon.lastBackupError) alarm.push('backup');
+    if (mon.backupSameDisk) warn.push('backupSameDisk');
+    let diskFreePct = null;
+    if (mon.dataDir) { try { const f = fs.statfsSync(mon.dataDir); diskFreePct = Math.floor(f.bavail / f.blocks * 100); if (diskFreePct < 10) alarm.push('disk'); else if (diskFreePct < 20) warn.push('disk'); } catch (e) {} }
+    const body = { ok: true, ledger: c.ok, level: alarm.length ? 'alarm' : warn.length ? 'warn' : 'ok', alarm, warn,
+      errors500_10m: e500, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
+    healthCache = { at: now, body }; return body;
+  }
   const readBody = req => new Promise((res, rej) => {
     let b = ''; req.on('data', c => { b += c; if (b.length > 100000) { rej(new Err('データが大きすぎます', 413)); req.destroy(); } });
     req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch (e) { rej(new Err('JSONが正しくありません')); } });
@@ -38,7 +67,7 @@ function createApp(opts) {
     // ---- 認証なし ----
     if (m === 'POST' && p === '/api/signup') { need(body.age18 === true, '18歳以上であることへの同意が必要です'); need(!limited('su' + ip, 10, 600000), '登録の試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.signupAsync(Object.assign({}, body, { ip }))); }
     if (m === 'POST' && p === '/api/login') { need(!limited('li' + ip, 20, 600000), 'ログインの試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.loginAsync(Object.assign({}, body, { ip }))); }
-    if (m === 'GET' && p === '/api/health') return send(res, 200, { ok: true, ledger: core.L.check().ok });
+    if (m === 'GET' && p === '/api/health') return send(res, 200, health());
     const u = core.auth(token); need(u, 'ログインしてください', 401);
     const isTop = u.role === 'creator' || u.role === 'sovereign';
     if (p !== '/api/me' && !(m === 'GET' && p.endsWith('/stream')) && limited('rq' + u.id, 600, 60000)) throw new Err('操作が速すぎます。少し待ってください', 429);
@@ -150,7 +179,7 @@ function createApp(opts) {
     try {
       if (url.pathname.startsWith('/api/')) await api(req, res, url); else serveStatic(req, res, url);
     } catch (e) {
-      if (!(e instanceof Err)) console.error('[error]', req.method, req.url, e);
+      if (!(e instanceof Err)) { console.error('[error]', req.method, req.url, e); mon.errors500.push(Date.now()); if (mon.errors500.length > 1000) mon.errors500.shift(); }
       if (!res.headersSent) send(res, e instanceof Err ? e.code : 500, { error: e instanceof Err ? e.message : 'サーバーでエラーが起きました' });
       else try { res.end(); } catch (e2) {}
     }
@@ -158,13 +187,20 @@ function createApp(opts) {
   const server = http.createServer(handler);
   const maintTick = () => { const m = core.maintenance(); if (!m.on && m.at && m.at <= Date.now()) { core.setMaintenance(null, true, m.msg, 0); tables.stopAll(); return true; } return false; };   // 予告の時刻になったら、自動でシステム更新中にする
   const mtimer = setInterval(() => { try { maintTick(); } catch (e) { console.error('maintTick', e); } }, (opts && opts.maintTickMs) || 15000); if (mtimer.unref) mtimer.unref();
-  return { server, core, tables, d, handler, maintTick, billing };
+  // 片付け: 回数制限の記録と、期限切れのログインを消す(長く動かすと、たまり続けてメモリ・ファイルが大きくなるため)
+  const tidy = (now = Date.now()) => {
+    for (const [k, a] of hits) if (!a.length || a[a.length - 1] < now - 600000) hits.delete(k);
+    for (const [k, t] of tickets) if (t.exp < now) tickets.delete(k);
+    return d.db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now).changes;
+  };
+  const ttimer = setInterval(() => { try { tidy(); } catch (e) { console.error('tidy', e); } }, 600000); if (ttimer.unref) ttimer.unref();
+  return { server, core, tables, d, handler, maintTick, billing, health, mon, tidy, hits };
 }
 
 if (require.main === module) {
   const file = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'solo.db');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const app = createApp({ dbFile: file, trustProxy: process.env.TRUST_PROXY === '1', tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
+  const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
   if (!app.billing.ready()) console.log('有料プラン: 鍵(STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PUBLIC_URL)が未設定なので、申し込みボタンは出ません');
   else console.log('有料プラン: ' + (app.billing.testMode() ? 'テストモード(本物のお金は動きません)' : '★本番モード(本物のお金が動きます)'));
   if (!app.d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get()) {
@@ -175,8 +211,14 @@ if (require.main === module) {
   // バックアップ: 起動時と1時間ごと(検査つき)。BACKUP_DIR は本番では別ボリューム/別の場所を推奨
   const bdir = process.env.BACKUP_DIR || path.join(path.dirname(file), 'backups');
   const bk = require('./backup');
-  const runBackup = () => { try { const f = bk.makeBackup(app.d.db, bdir); bk.prune(bdir); console.log('バックアップ作成:', f); } catch (e) { console.error('★バックアップ失敗:', e.message); } };
+  const runBackup = () => { try { const f = bk.makeBackup(app.d.db, bdir); bk.prune(bdir); app.mon.lastBackupOk = Date.now(); app.mon.lastBackupError = null; console.log('バックアップ作成:', f); } catch (e) { app.mon.lastBackupError = e.message; console.error('★バックアップ失敗:', e.message); } };
+  // 控えが本体と同じディスクにあると、ディスクが壊れたとき両方なくなる。健康診断で「注意」にする
+  try { fs.mkdirSync(bdir, { recursive: true }); app.mon.backupSameDisk = fs.statSync(bdir).dev === fs.statSync(path.dirname(file)).dev; } catch (e) {}
+  if (app.mon.backupSameDisk) console.log('注意: バックアップが本体と同じディスクにあります。BACKUP_DIR を別の場所にしてください');
   runBackup(); setInterval(runBackup, 3600000).unref();
+  // 想定外の失敗で、全部の卓を巻き込んで落ちないようにする。記録して健康診断を「警報」にし、人が判断する
+  process.on('uncaughtException', e => { app.mon.uncaught++; console.error('★想定外のエラー', e); });
+  process.on('unhandledRejection', e => { app.mon.uncaught++; console.error('★想定外のエラー(約束の失敗)', e); });
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, () => console.log('ソロ: http://localhost:' + port));
 }
