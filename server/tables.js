@@ -92,6 +92,7 @@ class Runtime {
   }
   autoFoldPending(i) { if (this.pending && this.pending.req.seat === i && !this.pending.req.short) this.resolvePending(this.pending.req.type === 'carryJoin' ? { act: 'skip' } : { act: 'fold' }, true); }
   broadcast() {
+    this.beat = Date.now();   // 最後に動いた時刻(止まった卓を見つけるため)
     for (const [uid, set] of this.subs) {
       if (!set.size) continue;
       const data = 'data: ' + JSON.stringify(this.view(uid)) + '\n\n';
@@ -426,6 +427,7 @@ class Runtime {
     this.loopOn = true; const M = this.M;
     try {
       while (this.status === 'running') {
+        this.beat = Date.now();
         if (this.stopReq) break;
         const present = this.seats.filter((st, i) => st && !st.away && this.connected(i)).length;
         if (present === 0) { await sleep(500); continue; }          // 全員が離席なら一時停止
@@ -445,6 +447,7 @@ class Runtime {
       }
     } catch (e) {
       console.error('table error', this.id, this.name, e);
+      M.tableErrors.push(Date.now()); if (M.tableErrors.length > 1000) M.tableErrors.shift();
       this.inGame = false; try { this.addLog('エラーのため卓を停止しました: ' + e.message, 'info'); this.endTable('error'); } catch (e2) {}
     } finally { this.loopOn = false; if (this.stopReq && this.status === 'running') this.endTable('stopped'); }
   }
@@ -555,6 +558,7 @@ class Runtime {
 class Tables {
   constructor(core, opt) {
     this.core = core; this.rt = new Map(); this.userTable = new Map();
+    this.tableErrors = [];   // エラーで止まった時刻(健康診断で数える)
     this.opt = Object.assign({ turnMs: 40000, voteMs: 60000, graceMs: 5 * 60000, minStayMs: 15 * 60000, disconnectGraceMs: 8000, beatScale: 1, chatEnabled: true, ads: false,
       minUnit: 100, feeBp: 100, jackpotBp: 200, jpRank: 10, jpLast: 1, shugiMin: 1, entryFee: true, feeTickMs: 30000, feeWarnMs: 5 * 60000, clock: () => Date.now() }, opt || {});
     core.onUserBanned = uid => this.evict(uid);
@@ -562,6 +566,8 @@ class Tables {
     if (this.opt.feeTickMs > 0) { this.timer = setInterval(() => { for (const rt of this.rt.values()) { try { rt.feeTick(); } catch (e) { console.error('feeTick', e); } } }, this.opt.feeTickMs); if (this.timer.unref) this.timer.unref(); }
   }
   seatedAt(uid) { return this.userTable.get(uid); }
+  // 動いているはずなのに、ms より長く何も起きていない卓の数(固まった卓)
+  stalled(ms, now = Date.now()) { let n = 0; for (const rt of this.rt.values()) if (rt.status === 'running' && rt.loopOn && now - (rt.beat || now) > ms) n++; return n; }
   save(rt) {
     this.core.db.prepare('UPDATE tables_ SET status=?,started_at=?,ended_at=?,state=? WHERE id=?').run(rt.status, rt.startedAt, ['ended', 'stopped'].includes(rt.status) ? Date.now() : null, JSON.stringify({ gameNo: rt.T.gameNo, pot: rt.T.pot, jp: rt.jpEntByUser() }), rt.id);
   }
