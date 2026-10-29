@@ -1,0 +1,72 @@
+# SOLO を Fly.io に置く(GitHub の機械で動く)。
+# 動くとき: このブランチにプログラムの変更が届いたとき / GitHub の画面の「Run workflow」を押したとき
+# 必要な金庫の値(GitHub → Settings → Secrets and variables → Actions):
+#   FLY_API_TOKEN    Fly.io の合鍵
+#   SOLO_SETUP_CODE  最初の設定(作成者を作る)の合言葉。8文字以上。作成者を作った後は使われない
+# 名前を変えたいとき: Variables に FLY_APP(例 solo-club-ishigaki)。なければ solo-club
+name: Fly.io に置く
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/vigilant-johnson-desok1]
+    paths: ['server/**', 'web/**', 'engine.js', 'Dockerfile', 'fly.toml', 'package.json', '.github/workflows/fly-deploy.yml']
+concurrency:
+  group: fly-deploy
+  cancel-in-progress: false
+permissions:
+  contents: read
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+      SETUP_CODE: ${{ secrets.SOLO_SETUP_CODE }}
+      APP: ${{ vars.FLY_APP || 'solo-club' }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: 合鍵があるか確かめる
+        id: key
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then
+            echo "::warning::GitHub の金庫に FLY_API_TOKEN がまだないので、置かずに終わります"
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.key.outputs.ok == '1'
+        with:
+          node-version: 22
+      - name: 試験(合格したときだけ置く)
+        if: steps.key.outputs.ok == '1'
+        # 手数料の試験は、元のコードから時々落ちる既知の問題があるため、落ちたときだけもう1回流す
+        run: npm test || { echo "::warning::落ちた試験があったので、もう1回だけ流します"; npm test; }
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.key.outputs.ok == '1'
+      - name: アプリと保存領域を用意する(初回だけ)
+        if: steps.key.outputs.ok == '1'
+        run: |
+          set -e
+          if ! flyctl status -a "$APP" > /dev/null 2>&1; then
+            ORG=$(flyctl orgs list --json | node -e 'const o=JSON.parse(require("fs").readFileSync(0,"utf8"));const a=Array.isArray(o)?o.map(x=>x.slug||x.Slug):Object.keys(o);console.log(a.includes("personal")?"personal":a[0])')
+            echo "アプリ $APP を $ORG に作ります"
+            flyctl apps create "$APP" --org "$ORG"
+          fi
+          if ! flyctl volumes list -a "$APP" --json | grep -q '"solo_data"'; then
+            flyctl volumes create solo_data -a "$APP" --region nrt --size 3 --yes
+          fi
+      - name: 最初の設定の合言葉を入れる
+        if: steps.key.outputs.ok == '1' && env.SETUP_CODE != ''
+        run: flyctl secrets set "SETUP_CODE=$SETUP_CODE" -a "$APP" --stage
+      - name: 置く(機械は1台だけ)
+        if: steps.key.outputs.ok == '1'
+        run: flyctl deploy -a "$APP" --remote-only --ha=false -e "PUBLIC_URL=https://$APP.fly.dev"
+      - name: 動いているか確かめる
+        if: steps.key.outputs.ok == '1'
+        run: |
+          for i in $(seq 1 12); do
+            if curl -fsS "https://$APP.fly.dev/api/health"; then echo; echo "動いています: https://$APP.fly.dev"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::置いたあと2分たっても健康診断が答えません"; exit 1

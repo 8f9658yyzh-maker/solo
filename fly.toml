@@ -8,7 +8,6 @@ primary_region = "nrt"       # 東京
   DB_FILE = "/data/solo.db"
   BACKUP_DIR = "/data/backups"
   TRUST_PROXY = "1"
-  PUBLIC_URL = "https://solo-club.jp"
 
 [[mounts]]
   source = "solo_data"

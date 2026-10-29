@@ -66,6 +66,23 @@ function authScreen(mode) {
   <p class="mute" style="text-align:center">このゲームのチップは、お金には交換できません。</p>${legalLinks()}</div>`;
 }
 A.goAuth = v => go('#/' + v);
+/* 最初の設定: サーバーを置いた直後に1回だけ。作成者(5億チップの持ち主)を作る */
+function setupScreen() {
+  clearTimers();
+  $('#app').innerHTML = `<div class="auth"><div class="logo"><b>SOLO</b><span>最初の設定</span></div>
+  <div class="card"><h3>SETUP<small>作成者のアカウントを作る(1回だけ)</small></h3>
+    <p class="mute" style="margin-top:0">サーバーを置いたときに決めた合言葉を入れてください。ここで作った人が作成者になり、5億チップがポケットに入ります。</p>
+    <label>合言葉</label><input id="s_code" type="password" autocomplete="off">
+    <label>ユーザー名<small>(3〜20文字)</small></label><input id="s_user" autocomplete="username" autocapitalize="none">
+    <label>パスワード<small>(8文字以上)</small></label><input id="s_pass" type="password" autocomplete="new-password">
+    <label>電話番号</label><input id="s_phone" inputmode="tel" autocomplete="tel" placeholder="09012345678">
+    <button class="btn gold block" style="margin-top:16px" data-a="doSetup">作成者を作る</button></div>${legalLinks()}</div>`;
+}
+A.doSetup = async () => {
+  if (!(await run(() => api('POST', '/api/setup', { code: val('s_code'), username: val('s_user'), password: val('s_pass'), phone: val('s_phone') })))) return;
+  const r = await run(() => api('POST', '/api/login', { username: val('s_user'), password: val('s_pass'), deviceId: deviceId() }), '作成者を作りました。ようこそ'); if (!r) return go('#/login');
+  S.token = r.token; saveToken(r.token); go('#/home');
+};
 A.doLogin = async () => {
   const r = await run(() => api('POST', '/api/login', { username: val('f_user'), password: val('f_pass'), deviceId: deviceId() })); if (!r) return;
   S.token = r.token; saveToken(r.token); go('#/home');

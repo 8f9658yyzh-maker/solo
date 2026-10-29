@@ -17,6 +17,7 @@ function createApp(opts) {
   if (opts.recover !== false) { const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`); }
   const webDir = path.join(__dirname, '..', 'web');
   const trustProxy = !!opts.trustProxy;
+  const setupCode = String(opts.setupCode || '').length >= 8 ? String(opts.setupCode) : '';   // 8文字未満の合言葉は使わない(当てられやすいため)
   const hits = new Map();
   const tickets = new Map();   // 卓の中継(SSE)用の短い引換券。本物のログイン用の鍵をURLに載せないため
   const limited = (key, max, ms) => { const now = Date.now(); const a = (hits.get(key) || []).filter(t => t > now - ms); a.push(now); hits.set(key, a); return a.length > max; };
@@ -74,6 +75,18 @@ function createApp(opts) {
     if (m === 'POST' && p === '/api/signup') { need(body.age18 === true, '18歳以上であることへの同意が必要です'); need(!limited('su' + ip, 10, 600000), '登録の試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.signupAsync(Object.assign({}, body, { ip }))); }
     if (m === 'POST' && p === '/api/login') { need(!limited('li' + ip, 20, 600000), 'ログインの試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.loginAsync(Object.assign({}, body, { ip }))); }
     if (m === 'GET' && p === '/api/health') return send(res, 200, health());
+    // 最初の設定: 作成者がまだいないときだけ、合言葉(SETUP_CODE)を知っている人が作成者を作れる。パスワードをサーバーの設定やチャットに書かずに済む
+    if (p === '/api/setup') {
+      const open = !!setupCode && !d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get();
+      if (m === 'GET') return send(res, 200, { needed: open });
+      need(open, '最初の設定は、もう終わっています', 400);
+      need(!limited('setup' + ip, 5, 600000), '試行が多すぎます。10分ほど待ってください', 429);
+      const a = Buffer.from(String(body.code || '')), b = Buffer.from(setupCode);
+      need(a.length === b.length && require('node:crypto').timingSafeEqual(a, b), '合言葉が違います', 403);
+      const id = core.bootstrap(String(body.username || ''), String(body.password || ''), String(body.phone || ''));
+      d.audit(id, 'setup', id, { ip });
+      return send(res, 200, { ok: true });
+    }
     const u = core.auth(token); need(u, 'ログインしてください', 401);
     const isTop = u.role === 'creator' || u.role === 'sovereign';
     if (p !== '/api/me' && !(m === 'GET' && p.endsWith('/stream')) && limited('rq' + u.id, 600, 60000)) throw new Err('操作が速すぎます。少し待ってください', 429);
@@ -237,7 +250,7 @@ function createApp(opts) {
 if (require.main === module) {
   const file = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'solo.db');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
+  const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', setupCode: process.env.SETUP_CODE, tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
   if (!app.billing.ready()) console.log('有料プラン: 鍵(STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PUBLIC_URL)が未設定なので、申し込みボタンは出ません');
   else console.log('有料プラン: ' + (app.billing.testMode() ? 'テストモード(本物のお金は動きません)' : '★本番モード(本物のお金が動きます)'));
   console.log('広告: ' + (app.ads.client ? '地元スポンサー + Google AdSense(設定の「広告会社」を1にすると出ます)' : '地元スポンサーだけ(ADSENSE_CLIENT が未設定)'));
@@ -245,7 +258,8 @@ if (require.main === module) {
   if (!app.d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get()) {
     const u = process.env.CREATOR_USER, pw = process.env.CREATOR_PASS, ph = process.env.CREATOR_PHONE;
     if (u && pw) { app.core.bootstrap(u, pw, ph); console.log('作成者アカウントを作成し、5億チップを発行しました'); }
-    else console.log('作成者がまだいません。CREATOR_USER / CREATOR_PASS / CREATOR_PHONE を指定して起動してください');
+    else if (process.env.SETUP_CODE) console.log('作成者がまだいません。画面の「最初の設定」から、合言葉(SETUP_CODE)を使って作ってください');
+    else console.log('作成者がまだいません。SETUP_CODE(画面から作る)か、CREATOR_USER / CREATOR_PASS / CREATOR_PHONE を指定して起動してください');
   }
   // バックアップ: 起動時と1時間ごと(検査つき)。BACKUP_DIR は本番では別ボリューム/別の場所を推奨
   const bdir = process.env.BACKUP_DIR || path.join(path.dirname(file), 'backups');

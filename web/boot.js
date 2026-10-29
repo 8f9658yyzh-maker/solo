@@ -3,7 +3,8 @@ function route() {
   clearTimers();
   const h = location.hash || '#/home';
   if (!h.startsWith('#/table/') && !h.startsWith('#/practice')) stopTable();
-  if (h === '#/login') return authScreen('login');
+  if (h === '#/setup') return setupScreen();
+  if (h === '#/login') { authScreen('login'); fetch('/api/setup').then(r => r.json()).then(j => { if (j.needed && location.hash === '#/login') go('#/setup'); }).catch(() => {}); return; }
   if (h === '#/signup') return authScreen('signup');
   if (!S.token) return go('#/login');
   if (h.startsWith('#/table/')) return loadMe().then(() => tableOnline(Number(h.split('/')[2]))).catch(x => { toast(x.message, true); S.skipResume = true; go('#/home'); });
