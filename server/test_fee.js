@@ -7,6 +7,8 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 const thr = (f, re) => { try { f(); } catch (e) { if (re && !re.test(e.message)) throw new Error('違うエラー: ' + e.message); return; } throw new Error('エラーになるはずが成功した'); };
 const thrA = async (f, re) => { try { await f(); } catch (e) { if (re && !re.test(e.message)) throw new Error('違うエラー: ' + e.message); return; } throw new Error('エラーになるはずが成功した'); };
 const JST = s => Date.parse(s + '+09:00');
+// 条件が満たされるまで待つ(決まった時間だけ待つと、機械の速さで結果が変わるため)
+const until = async (f, what, ms = 10000) => { const end = Date.now() + ms; while (!f()) { if (Date.now() > end) throw new Error('待ちきれません: ' + what); await sleep(10); } };
 
 function world() {
   const d = D.open(':memory:'), c = new Core(d);
@@ -21,14 +23,20 @@ function world() {
   W.T = new Tables(c, { turnMs: 3000, voteMs: 2000, graceMs: 150, minStayMs: 300, disconnectGraceMs: 100, beatScale: 0, feeTickMs: 0, clock: () => W.now });
   return W;
 }
+// 決まった動きのボット(でたらめに動くと、誰かのチップが尽きて卓が止まり、結果が毎回変わるため)
+// 親: 前のゲームで勝った人は降りて、次の人に親を回す。それ以外は毎ゲーム違う額をベット(切り上げを確かめるため、場が100の倍数にならない額)
+// 子・ビキ: 降りる。流しの次の試合: 見送り。→ 勝つ人が順番に回り、どの人のチップも尽きない
 function bot(W, rt, uid) {
-  const b = { last: null, notes: [] };
+  const b = { last: null, notes: [] }, me = W.c.user(uid);
   b.res = { write: s => { if (!s.startsWith('data: ')) return; const v = JSON.parse(s.slice(6)); b.last = v;
     if (v.req && !b.busy) { b.busy = true; setImmediate(() => { b.busy = false; if (!rt.pending || rt.pending.req.seat !== v.req.seat) return; const r = v.req;
-      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: Math.random() < 0.5 ? 'bet' : 'fold', amount: r.cap } : r.type === 'biki' ? { act: 'follow', up: 0 } : { act: Math.random() < 0.5 ? 'follow' : 'fold' };
-      try { rt.act(W.c.user(uid), a); } catch (e) {} }); } } };
-  rt.subscribe(W.c.user(uid), b.res); b.stop = () => rt.unsubscribe(W.c.user(uid), b.res); return b;
+      const wonLast = !!(rt.lastGame && rt.lastGame.winner === me.username);
+      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? (wonLast ? { act: 'fold' } : { act: 'bet', amount: Math.min(r.cap, r.minBet + (rt.T.gameNo * 37) % 400) }) : { act: 'fold' };
+      try { rt.act(me, a); } catch (e) {} }); } } };
+  b.start = () => rt.subscribe(me, b.res); b.stop = () => rt.unsubscribe(me, b.res); b.start(); return b;
 }
+// ボットの接続を切り、卓がゲームとゲームの間で止まるまで待つ(全員が離席扱いになると、卓は次のゲームを始めない)
+const pause = async (rt, bots) => { bots.forEach(b => b.stop()); await until(() => rt.seats.every(st => !st || st.away) && !rt.inGame && rt.T.pot === 0, '卓が止まる'); };
 const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHERE to_user=? AND kind=?').all(uid, kind);
 
 (async () => {
@@ -79,7 +87,8 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     for (let i = 0; i < 3; i++) assert.strictEqual(c.pocket(W.ps[i]), 20000 - 5000 - 1000);
     assert.strictEqual(c.L.balance('f:' + rt.id), 3000);
     ok('開始時にポケットから1,000チップずつ引かれ、卓の保管へ入った(卓のチップは引かれない)');
-    await sleep(2500);
+    await until(() => rt.T.gameNo >= 8, 'ゲームが8回進む');
+    await pause(rt, bots);   // ここから先は、ゲームの途中ではない状態で確かめる
     assert.ok(rt.T.gameNo >= 8, 'ゲームが進む ' + rt.T.gameNo);
     const rows = c.db.prepare('SELECT data FROM games WHERE table_id=?').all(rt.id).map(r => JSON.parse(r.data));
     let rake = 0, wins = 0;
@@ -104,13 +113,17 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     assert.strictEqual(c.pocket(W.ps[0]), 20000 - 5000 - 2000); assert.strictEqual(c.L.balance('f:' + rt.id) >= 5000, true);
     assert.strictEqual(c.pocket(low), 500); assert.strictEqual(rt.T.players[rt.seatOf(low)].sitout, true);
     assert.strictEqual(notes(W, low, 'fee_blocked').length, 1);
-    const g0 = rt.T.gameNo; await sleep(800);
-    assert.ok(rt.T.gameNo === g0 || true);
+    // 休んでいる人を除いた2人で、ゲームを進める
+    const g0 = rt.T.gameNo; bots[0].start(); bots[1].start();
+    await until(() => rt.T.gameNo >= g0 + 2, '休みの間もゲームが進む');
+    await pause(rt, bots);
     const v = rt.view(low); assert.strictEqual(v.seats[rt.seatOf(low)].rest, true); assert.strictEqual(v.you.fee.blocked, true);
     ok('期限が来ると、ポケットにある人は自動で延長(2時間目1,000)。足りない人は休みになり通知される');
     // 休み中のゲームに参加していない
     const played = c.db.prepare('SELECT data FROM games WHERE table_id=? AND no>?').all(rt.id, g0).map(r => JSON.parse(r.data));
+    assert.ok(played.length >= 2, '休みの間のゲーム ' + played.length);
     assert.ok(played.every(d => !d.parts.some(p => p.uid === low)), '休み中は参加しない');
+    for (const d of played) { const gross = d.potWon + d.fee + d.cut; assert.strictEqual(d.fee, Math.ceil(gross * 100 / 10000)); assert.strictEqual(d.cut, Math.ceil(gross * 200 / 10000)); rake += d.fee; }
     // AJがチップを入れると復帰
     c.give(c.user(W.aj), low, 5000); rt.feeTick(W.now + 1000);
     assert.strictEqual(rt.T.players[rt.seatOf(low)].sitout, false); assert.strictEqual(c.pocket(low), 5500 - 1000);
@@ -127,7 +140,7 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     thr(() => c.feeReceive(c.user(W.cid), rt.id), /ありません/);
     ok('保管が5,000を超えると作成者・統括責任者に通知。「受け取る」で共有ポケットに入り、記録に残る(一般の人は受け取れない)');
     // 退席して戻っても、払い済みの時間内なら再び引かれない
-    W.T.stop(aj, rt.id); await sleep(800); bots.forEach(b => b.stop());
+    W.T.stop(aj, rt.id); await until(() => rt.status === 'stopped', '卓が終わる');
     assert.ok(c.L.check().ok);
     let tot = 0; for (const id of W.ps) tot += c.pocket(id); 
     assert.ok(c.L.check().ok);
