@@ -59,7 +59,7 @@ function authScreen(mode) {
     <label>パスワード<small>(8文字以上)</small></label><input id="f_pass" type="password" autocomplete="${su ? 'new-password' : 'current-password'}">
     ${su ? `<label>電話番号<small>(1つの電話番号につきアカウントは1つ)</small></label><input id="f_phone" inputmode="tel" autocomplete="tel" placeholder="09012345678">
     <p class="mute">電話番号は、1人が複数のアカウントを作るのを防ぐためだけに使います。画面には出ず、暗号化した値で保存します。<br>※ 現在のテスト版では、SMSでの本人確認はまだ行っていません。</p>
-    <label style="display:flex;gap:8px;align-items:flex-start;letter-spacing:0;font-weight:400;font-size:13px;color:var(--soft)"><input id="f_age" type="checkbox" style="width:20px;margin-top:2px">18歳以上であり、<a href="/legal/terms" target="_blank" rel="noopener" style="color:#C9A24B">利用規約</a>と<a href="/legal/privacy" target="_blank" rel="noopener" style="color:#C9A24B">プライバシーポリシー</a>に同意します</label>` : ''}
+    <label style="display:flex;gap:8px;align-items:flex-start;letter-spacing:0;font-weight:400;font-size:13px;color:var(--soft)"><input id="f_age" type="checkbox" style="width:20px;margin-top:2px;flex:none"><span>18歳以上であり、<a href="/legal/terms" target="_blank" rel="noopener" style="color:#C9A24B">利用規約</a>と<a href="/legal/privacy" target="_blank" rel="noopener" style="color:#C9A24B">プライバシーポリシー</a>に同意します</span></label>` : ''}
     <button class="btn gold block" style="margin-top:16px" data-a="${su ? 'doSignup' : 'doLogin'}">${su ? 'SIGN UP <small>登録する</small>' : 'LOG IN <small>ログイン</small>'}</button>
     <button class="btn block" style="margin-top:8px;border:0;background:none" data-a="goAuth" data-v="${su ? 'login' : 'signup'}">${su ? 'ログインへ' : '招待コードをお持ちの方はこちら'}</button>
   </div>
