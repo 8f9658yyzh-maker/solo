@@ -469,6 +469,7 @@ class Runtime {
       showdown: (r.showdown || []).map(x => ({ name: nameOf(x.seat), uid: uidOf(x.seat), hand: x.hand, label: x.label }))
     };
     this.core.db.prepare('INSERT INTO games(table_id,no,ts,color,hash,commit_str,how,winner,result,data) VALUES(?,?,?,?,?,?,?,?,?,?)').run(this.id, g.no, Date.now(), g.color, g.commit.hash, g.commit.str, how, this.lastGame.winner, JSON.stringify(this.lastGame.deltas), JSON.stringify(dataRec));
+    if (this.core.onGame) { try { this.core.onGame(this.id, Object.assign({ winner: this.lastGame.winner }, dataRec)); } catch (e) { console.error('戦績の記録', e); } }   // 戦績(本人だけが見る)
     this._net = null;
     if (r.type === 'win' && how === 'show') this.trackFlow(r, g);
     this.M.save(this);

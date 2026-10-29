@@ -3,18 +3,24 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const D = require('./db'); const { Core, Err, need } = require('./core'); const { Tables, DEFAULTS } = require('./tables'); const { Billing } = require('./billing');
+const { Stats } = require('./stats'); const { Perks } = require('./perks'); const { Ads } = require('./ads'); const { ChipRequests } = require('./chipreq'); const { Legal } = require('./legal');
 
 function createApp(opts) {
   opts = opts || {};
   const d = D.open(opts.dbFile || ':memory:'), core = new Core(d, opts.core), tables = new Tables(core, opts.tables);
   const billing = new Billing(d, core, opts.billing);   // 有料プラン(鍵がなければ申し込みボタンを出さない)
+  const perks = billing.perks = new Perks(d, core, billing);   // 有料の特典(テーマ・単品の購入)
+  const stats = new Stats(d, core, billing); core.onGame = (tid, rec) => stats.record(tid, rec);   // 戦績
+  const ads = new Ads(d, core, billing, opts.ads || opts.billing);   // 広告(地元スポンサー・広告会社)
+  const chipreq = new ChipRequests(d, core);   // チップの申請(AJ・管理責任者 → 上の立場)
+  const legal = new Legal(d, core, opts.legal || opts.billing);   // 利用規約などのページと同意
   if (opts.recover !== false) { const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`); }
   const webDir = path.join(__dirname, '..', 'web');
   const trustProxy = !!opts.trustProxy;
   const hits = new Map();
   const tickets = new Map();   // 卓の中継(SSE)用の短い引換券。本物のログイン用の鍵をURLに載せないため
   const limited = (key, max, ms) => { const now = Date.now(); const a = (hits.get(key) || []).filter(t => t > now - ms); a.push(now); hits.set(key, a); return a.length > max; };
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+  const MIME = { '.txt': 'text/plain; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
   // 中継の後ろでは、中継が書いた値だけを信じる。X-Forwarded-For の先頭は利用者が自由に書けるので使わない(使うとIPの締め出し・回数制限をすり抜けられる)
   const clientIp = req => {
@@ -77,13 +83,29 @@ function createApp(opts) {
     if (m === 'POST' && p === '/api/logout') { core.logout(token); return send(res, 200, { ok: true }); }
     if (m === 'GET' && p === '/api/me') {
       const house = core.homeHouseId(u);
-      return send(res, 200, { user: core.pub(u), pocket: core.pocket(u.id), homeHouse: house, houses: core.myHouses(u), seatedAt: tables.seatedAt(u.id) || null, unread: core.notifications(u).filter(n => !n.read).length, peek: core.peekBalance(u.id), plan: billing.status(u), adFree: billing.active(u.id), supply: isTop ? core.L.supply() : undefined, defaults: DEFAULTS, chatEnabled: tables.opt.chatEnabled, ads: !!tables.opt.ads, maintenance: mt.on ? { msg: mt.msg || '', ts: mt.ts } : null, maintNotice: !mt.on && mt.at > Date.now() ? { at: mt.at, msg: mt.msg || '' } : null, rules: { minUnit: tables.opt.minUnit, feeBp: tables.opt.feeBp, jackpotBp: tables.opt.jackpotBp, jpRank: tables.opt.jpRank, shugiMin: tables.opt.shugiMin, entryFee: tables.opt.entryFee, entryFirst: core.cfg.ENTRY_FEE_FIRST, entryNext: core.cfg.ENTRY_FEE_NEXT }, pass: tables.opt.entryFee ? (() => { const n = tables.opt.clock(), r = core.passRow(u.id, n); return { exempt: isTop, until: r.paid_until > n ? r.paid_until : 0, next: core.entryFeeNow(u.id, n), count: r.n }; })() : null });
+      return send(res, 200, { user: core.pub(u), pocket: core.pocket(u.id), homeHouse: house, houses: core.myHouses(u), seatedAt: tables.seatedAt(u.id) || null, unread: core.notifications(u).filter(n => !n.read).length, peek: core.peekBalance(u.id), plan: billing.status(u), adFree: billing.active(u.id), perks: perks.status(u), ad: ads.config(u), terms: { need: legal.need(u), ver: legal.version() }, supply: isTop ? core.L.supply() : undefined, defaults: DEFAULTS, chatEnabled: tables.opt.chatEnabled, ads: !!tables.opt.ads, maintenance: mt.on ? { msg: mt.msg || '', ts: mt.ts } : null, maintNotice: !mt.on && mt.at > Date.now() ? { at: mt.at, msg: mt.msg || '' } : null, rules: { minUnit: tables.opt.minUnit, feeBp: tables.opt.feeBp, jackpotBp: tables.opt.jackpotBp, jpRank: tables.opt.jpRank, shugiMin: tables.opt.shugiMin, entryFee: tables.opt.entryFee, entryFirst: core.cfg.ENTRY_FEE_FIRST, entryNext: core.cfg.ENTRY_FEE_NEXT }, pass: tables.opt.entryFee ? (() => { const n = tables.opt.clock(), r = core.passRow(u.id, n); return { exempt: isTop, until: r.paid_until > n ? r.paid_until : 0, next: core.entryFeeNow(u.id, n), count: r.n }; })() : null });
     }
     // ---- 有料プラン ----
     if (m === 'GET' && p === '/api/plan') return send(res, 200, billing.status(u));
     if (m === 'POST' && p === '/api/plan/checkout') { need(!limited('co' + u.id, 5, 600000), '申し込みの操作が多すぎます。しばらく待ってください', 429); return send(res, 200, await billing.checkout(u)); }
     if (m === 'POST' && p === '/api/plan/portal') return send(res, 200, await billing.portal(u));
     if (m === 'GET' && p === '/api/admin/plans') return send(res, 200, billing.list(u));
+    // ---- 特典(戦績・テーマ・単品) ----
+    if (m === 'GET' && p === '/api/stats') return send(res, 200, stats.mine(u, q.get('days')));
+    if (m === 'POST' && p === '/api/prefs') return send(res, 200, perks.setTheme(u, String(body.theme || '')));
+    if (m === 'POST' && p === '/api/shop/buy') { need(!limited('co' + u.id, 5, 600000), '申し込みの操作が多すぎます。しばらく待ってください', 429); return send(res, 200, await billing.buy(u, body.item)); }
+    if (m === 'GET' && p === '/api/admin/sales') return send(res, 200, perks.sales(u));
+    if (m === 'POST' && p === '/api/terms/agree') return send(res, 200, legal.agree(u, String(body.ver || '')));
+    // ---- 広告 ----
+    if (m === 'GET' && p === '/api/ads/pick') return send(res, 200, ads.pick(u, q.get('slot')));
+    if (m === 'POST' && p === '/api/ads/click') { need(!limited('ac' + u.id, 30, 600000), '操作が多すぎます', 429); return send(res, 200, ads.click(u, body.id)); }
+    if (m === 'GET' && p === '/api/admin/sponsors') return send(res, 200, ads.list(u));
+    if (m === 'POST' && p === '/api/admin/sponsors') return send(res, 200, ads.create(u, body));
+    if ((mm = p.match(/^\/api\/admin\/sponsors\/(\d+)(\/image)?$/))) { if (m === 'PATCH' && !mm[2]) return send(res, 200, ads.update(u, Number(mm[1]), body)); if (m === 'GET' && mm[2]) return send(res, 200, ads.image(u, Number(mm[1]))); }
+    // ---- チップの申請 ----
+    if (m === 'GET' && p === '/api/chip-requests') return send(res, 200, chipreq.list(u));
+    if (m === 'POST' && p === '/api/chip-requests') { need(!limited('cr' + u.id, 10, 3600000), '申請が多すぎます。しばらく待ってください', 429); return send(res, 200, chipreq.create(u, body.amount, body.note)); }
+    if ((mm = p.match(/^\/api\/chip-requests\/(\d+)\/(approve|decline|cancel)$/)) && m === 'POST') return send(res, 200, mm[2] === 'cancel' ? chipreq.cancel(u, Number(mm[1])) : chipreq.decide(u, Number(mm[1]), mm[2] === 'approve', body.reply));
     if (m === 'POST' && p === '/api/invites') return send(res, 200, core.createInvite(u, body.role));
     if (m === 'GET' && p === '/api/users') return send(res, 200, core.visibleUsers(u));
     if (m === 'POST' && p === '/api/maintenance') { const v = core.setMaintenance(u, body.on === true, body.msg, body.at); const stopped = v.on ? tables.stopAll() : 0; return send(res, 200, Object.assign({ stopped }, v)); }
@@ -135,7 +157,7 @@ function createApp(opts) {
       if (m === 'GET' && act === 'games') { need(rt.seatOf(u.id) >= 0 || isTop || tables.participated(id, u.id), '権限がありません', 403); return send(res, 200, tables.games(id)); }
       if (m === 'GET' && act === 'gamedata') return send(res, 200, tables.gameData(id, u));
       if (m === 'POST' && act === 'ticket') { for (const [k, t] of tickets) if (t.exp < Date.now()) tickets.delete(k); const k = D.rand(16); tickets.set(k, { token, tableId: id, exp: Date.now() + 120000 }); return send(res, 200, { ticket: k }); }
-      if (m === 'POST' && act === 'join') return send(res, 200, await rt.join(u, body.buyIn));
+      if (m === 'POST' && act === 'join') { need(!legal.need(u), '新しい利用規約への同意が必要です。ホームの画面で確認してください', 403); return send(res, 200, await rt.join(u, body.buyIn)); }
       if (m === 'POST' && act === 'leave') return send(res, 200, rt.leave(u));
       if (m === 'POST' && act === 'act') { rt.act(u, body); return send(res, 200, { ok: true }); }
       if (m === 'POST' && act === 'away') { rt.setAway(u, !!body.away); return send(res, 200, { ok: true }); }
@@ -163,17 +185,32 @@ function createApp(opts) {
     throw new Err('見つかりません', 404);
   }
 
+  // 画面の安全の決まり(CSP)。広告会社を使うときだけ、Google の広告の読み込み先を足す
+  const NET = 'https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com https://*.gstatic.com https://*.adtrafficquality.google https://*.googleadservices.com';
+  const csp = () => ads.net()
+    ? `default-src 'self'; media-src 'self' blob: data:; script-src 'self' ${NET}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' ${NET}; frame-src ${NET}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`
+    : "default-src 'self'; media-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  const headers = type => ({ 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': ads.net() ? 'strict-origin-when-cross-origin' : 'no-referrer', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': csp() });
   function serveStatic(req, res, url) {
     let p = decodeURIComponent(url.pathname);
+    if (p === '/ads.txt') { const t = ads.adsTxt(); res.writeHead(t ? 200 : 404, headers(MIME['.txt'])); return res.end(t || ''); }
+    { const lm = p.match(/^\/legal\/([a-z]+)(?:\.html)?$/); if (lm) {   // 規約などのページ(運営者・販売者の情報を差し込む)
+      return fs.readFile(path.join(webDir, 'legal', lm[1] + '.html'), 'utf8', (err, tpl) => {
+        if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
+        let out; try { out = legal.render(lm[1], tpl); } catch (e) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
+        res.writeHead(200, headers(MIME['.html'])); res.end(out);
+      });
+    } }
     if (p === '/engine.js') p = null;
     const file = p === null ? path.join(__dirname, '..', 'engine.js') : path.join(webDir, p === '/' ? 'index.html' : p);
     if (p !== null && !path.resolve(file).startsWith(path.resolve(webDir))) { res.writeHead(403); return res.end(); }
     fs.readFile(file, (err, buf) => {
       if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; media-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
+      res.writeHead(200, headers(MIME[path.extname(file)] || 'application/octet-stream'));
       res.end(buf);
     });
   }
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
@@ -194,7 +231,7 @@ function createApp(opts) {
     return d.db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now).changes;
   };
   const ttimer = setInterval(() => { try { tidy(); } catch (e) { console.error('tidy', e); } }, 600000); if (ttimer.unref) ttimer.unref();
-  return { server, core, tables, d, handler, maintTick, billing, health, mon, tidy, hits };
+  return { server, core, tables, d, handler, maintTick, billing, health, mon, tidy, hits, perks, stats, ads, chipreq, legal };
 }
 
 if (require.main === module) {
@@ -203,6 +240,8 @@ if (require.main === module) {
   const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
   if (!app.billing.ready()) console.log('有料プラン: 鍵(STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PUBLIC_URL)が未設定なので、申し込みボタンは出ません');
   else console.log('有料プラン: ' + (app.billing.testMode() ? 'テストモード(本物のお金は動きません)' : '★本番モード(本物のお金が動きます)'));
+  console.log('広告: ' + (app.ads.client ? '地元スポンサー + Google AdSense(設定の「広告会社」を1にすると出ます)' : '地元スポンサーだけ(ADSENSE_CLIENT が未設定)'));
+  { const miss = ['LEGAL_OPERATOR', 'LEGAL_CONTACT'].concat(app.billing.ready() ? ['SELLER_NAME', 'SELLER_ADDRESS', 'SELLER_PHONE'] : []).filter(k => !process.env[k]); if (miss.length) console.log('注意: 規約などのページに【未記入】があります: ' + miss.join(', ')); }
   if (!app.d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get()) {
     const u = process.env.CREATOR_USER, pw = process.env.CREATOR_PASS, ph = process.env.CREATOR_PHONE;
     if (u && pw) { app.core.bootstrap(u, pw, ph); console.log('作成者アカウントを作成し、5億チップを発行しました'); }

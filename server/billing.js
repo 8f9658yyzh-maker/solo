@@ -2,7 +2,8 @@
 // 有料プラン(毎月の自動払い)。Stripe(決済の会社)とのやりとりは、このファイルだけで行います。
 // - 申し込み: Stripe の支払い画面(チェックアウト)へ案内する。カード番号はこのアプリを通らない。
 // - 結果の受け取り: Stripe からの知らせ(Webhook)を、署名を確かめてから記録する。
-// - プランでできること: チップは一切増えない(お金でチップを買える形にしないため)。広告なしなど、遊びの外側だけ。
+// - プランでできること: チップは一切増えない(お金でチップを買える形にしないため)。広告なし・詳しい戦績・卓のテーマなど、遊びの外側だけ。
+// - 単品(買い切り): 卓のテーマを1つずつ。商品と値段はサーバー側だけで決め、画面からは商品の名前しか受け取らない。
 const crypto = require('node:crypto');
 const { Err, need } = require('./core');
 
@@ -83,6 +84,42 @@ class Billing {
     need(s.url, '支払い画面のURLを受け取れませんでした', 502);
     return { url: s.url };
   }
+  // 単品の購入(買い切り): Stripe の支払い画面のURLを返す。付くのは、Stripe から「支払い済み」の知らせが届いたとき
+  async buy(u, itemId) {
+    need(this.perks, '準備中です', 503);
+    const item = this.perks.item(String(itemId || ''));
+    need(item, 'その商品はありません', 404);
+    need(this.planOf(u), 'あなたの立場では、購入しなくても使えます', 400);
+    need(this.ready(), '決済の設定がまだです', 503);
+    need(this.core.cfg.BILLING, 'いまは購入を受け付けていません', 400);
+    need(!this.perks.owns(u.id, itemId), 'すでに持っています');
+    const price = this.perks.price(), r = this.row(u.id);
+    const f = {
+      mode: 'payment', locale: 'ja', client_reference_id: String(u.id),
+      'metadata[user_id]': String(u.id), 'metadata[item]': itemId, 'metadata[price]': String(price),
+      'payment_intent_data[metadata][user_id]': String(u.id), 'payment_intent_data[metadata][item]': itemId,
+      'payment_method_types[0]': 'card',
+      'line_items[0][quantity]': '1',
+      'line_items[0][price_data][currency]': 'jpy',
+      'line_items[0][price_data][unit_amount]': String(price),
+      'line_items[0][price_data][product_data][name]': 'SOLO ' + item.name,
+      success_url: this.publicUrl + '/?buy=ok#/wallet',
+      cancel_url: this.publicUrl + '/?buy=cancel#/wallet'
+    };
+    if (r && r.customer) f.customer = r.customer;
+    const s = await this.stripe('POST', '/v1/checkout/sessions', f);
+    this.D.audit(u.id, 'item_checkout', u.id, { item: itemId, price, session: s.id });
+    need(s.url, '支払い画面のURLを受け取れませんでした', 502);
+    return { url: s.url };
+  }
+  // 単品の支払いが終わった知らせ。金額と商品は、こちらが申し込みのときに決めた値(metadata)を使う
+  paid(o) {
+    if (!this.perks || o.mode !== 'payment' || o.payment_status !== 'paid') return;
+    const uid = Number(o.metadata && o.metadata.user_id), item = o.metadata && o.metadata.item;
+    if (!uid || !this.core.user(uid) || !this.perks.item(item)) { console.error('[stripe] 持ち主か商品の分からない支払い', o.id); return; }
+    const price = Number(o.amount_total != null ? o.amount_total : (o.metadata && o.metadata.price)) || null;
+    if (this.perks.grant(uid, item, 'stripe', o.id, o.payment_intent || null, price)) this.core.notify(uid, 'plan', { msg: this.perks.item(item).name + 'が使えるようになりました' });
+  }
   // 解約・カード変更: Stripe の「お客さま用の管理画面」のURLを返す
   async portal(u) {
     const r = this.row(u.id); need(r && r.customer, 'まだ有料プランの記録がありません');
@@ -114,6 +151,8 @@ class Billing {
     else if (ev.type === 'invoice.payment_failed') subId = o.subscription;
     // 知らせの順番は入れ替わることがあるので、毎回 Stripe に最新の状態を聞き直してから記録する
     if (subId) await this.sync(subId, ev.type);
+    if (ev.type === 'checkout.session.completed' || ev.type === 'checkout.session.async_payment_succeeded') this.paid(o);
+    if (ev.type === 'charge.refunded' && o.refunded && this.perks) this.perks.revokeByPayment(o.payment_intent);   // 全額の返金だけ。一部返金では止めない
     this.db.prepare('INSERT OR IGNORE INTO stripe_events(id,type,ts) VALUES(?,?,?)').run(ev.id, ev.type, this.now());
     return { ok: true };
   }
@@ -129,6 +168,9 @@ class Billing {
       ON CONFLICT(user_id) DO UPDATE SET plan=excluded.plan,status=excluded.status,customer=COALESCE(excluded.customer,subscriptions.customer),sub_id=excluded.sub_id,price=excluded.price,period_end=excluded.period_end,cancel_at_end=excluded.cancel_at_end,updated_at=excluded.updated_at`)
       .run(uid, plan, String(s.status || 'unknown'), s.customer || null, s.id, price, end, s.cancel_at_period_end ? 1 : 0, this.now());
     const nowActive = this.active(uid);
+    // 新しい月に入ったら、手札確認チケットを付ける(設定で0枚なら付けない。同じ月は1回だけ)
+    const peek = Number(this.core.cfg.PLAN_PEEK) || 0, ref = 'plan:' + s.id + ':' + end;
+    if (peek > 0 && nowActive && ['active', 'trialing'].includes(s.status) && !this.db.prepare('SELECT 1 FROM peek_log WHERE ref=?').get(ref)) this.core.peekAdd(uid, peek, 'plan', ref);
     this.D.audit(null, 'plan_sync', uid, { why, status: s.status, end, cancelAtEnd: !!s.cancel_at_period_end });
     if (s.status === 'past_due' && (!before || before.status !== 'past_due')) this.core.notify(uid, 'plan', { msg: 'プランの支払いができませんでした。カードを確かめてください(3日間はそのまま使えます)' });
     else if (!wasActive && nowActive) this.core.notify(uid, 'plan', { msg: PLAN_JA[plan] + 'が使えるようになりました' });

@@ -10,6 +10,15 @@ const POS = {
   2: [[110, 120], [280, 120]],
   1: [[195, 62]]
 };
+// 卓のテーマ(見た目だけ。勝ち負けやチップには関係しない)。使えるかどうかはサーバーが決める(S.me.perks)
+const THEMES = {
+  classic: { felt: '#1A6A96 0%,#0F4C72 52%,#08283F 100%', rail: '#8A5A30 0%,#4A2C14 30%,#7A4C26 55%,#3A200E 80%,#6B4222 100%' },
+  kariyushi: { felt: '#C0503A 0%,#932E20 52%,#4A120B 100%', rail: '#3A2A22 0%,#1A110C 30%,#33241C 55%,#120B08 80%,#2B1E17 100%' },
+  yaeyama: { felt: '#22B0A0 0%,#13807A 52%,#06403A 100%', rail: '#D2AA70 0%,#8A6436 30%,#BE9258 55%,#6E4A22 80%,#A27A44 100%' },
+  tsuki: { felt: '#465166 0%,#2A3240 52%,#0F1319 100%', rail: '#D6DBE2 0%,#6E7681 30%,#B4BBC4 55%,#4A515B 80%,#9AA1AA 100%' },
+  kogane: { felt: '#2E2C22 0%,#17160F 52%,#050504 100%', rail: '#F2D27A 0%,#A97A22 30%,#E3BC5E 55%,#7A5512 80%,#C9A24B 100%' }
+};
+const thm = () => THEMES[(typeof S !== 'undefined' && S.me && S.me.perks && S.me.perks.theme) || 'classic'] || THEMES.classic;
 const HUES = ['#D98A9A', '#3FA7B5', '#5E9E78', '#9B86C8', '#D9835A', '#C8B25A', '#6FB3A3', '#7BA0E0'];
 const hueOf = n => { let h = 0; for (const c of String(n)) h = (h * 31 + c.codePointAt(0)) >>> 0; return HUES[h % HUES.length]; };
 const TAG = { BET: ['#C9A24B', '#0B1522'], CALL: ['#1C8196', '#fff'], UP: ['#B8322A', '#fff'], FOLD: ['#4A5A6E', '#EAF0F7'] };
@@ -177,7 +186,7 @@ function tableHTML(v) {
     <button class="act" data-a="tMenu" aria-label="メニュー" style="width:40px;height:40px;border:1px solid #2A4262;border-radius:2px;background:transparent;color:#C9A24B"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button></div>
   <div style="position:relative;height:690px">
     ${jpTicker(v)}
-    <div style="position:absolute;left:16px;top:48px;width:358px;height:566px;border-radius:64px;border:16px solid transparent;background:repeating-radial-gradient(circle at 30% 20%,rgba(255,255,255,.025) 0 1px,transparent 1px 3px) padding-box,radial-gradient(ellipse at 50% 42%,#1A6A96 0%,#0F4C72 52%,#08283F 100%) padding-box,linear-gradient(135deg,#8A5A30 0%,#4A2C14 30%,#7A4C26 55%,#3A200E 80%,#6B4222 100%) border-box;box-shadow:0 0 0 1px rgba(201,162,75,.7),0 16px 34px rgba(0,0,0,.7),inset 0 0 0 2px ${rim},inset 0 0 50px rgba(0,0,0,.5),inset 0 4px 10px rgba(0,0,0,.6)"></div>
+    <div style="position:absolute;left:16px;top:48px;width:358px;height:566px;border-radius:64px;border:16px solid transparent;background:repeating-radial-gradient(circle at 30% 20%,rgba(255,255,255,.025) 0 1px,transparent 1px 3px) padding-box,radial-gradient(ellipse at 50% 42%,${thm().felt}) padding-box,linear-gradient(135deg,${thm().rail}) border-box;box-shadow:0 0 0 1px rgba(201,162,75,.7),0 16px 34px rgba(0,0,0,.7),inset 0 0 0 2px ${rim},inset 0 0 50px rgba(0,0,0,.5),inset 0 4px 10px rgba(0,0,0,.6)"></div>
     <div style="position:absolute;left:16px;width:358px;top:296px;text-align:center;font-size:72px;font-weight:700;letter-spacing:.45em;text-indent:.45em;color:rgba(234,240,247,.05)">SOLO</div>
     <div style="position:absolute;left:62px;width:266px;top:196px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
       <button class="act" data-a="tSheet" data-v="rules" aria-label="卓の情報" style="all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent">

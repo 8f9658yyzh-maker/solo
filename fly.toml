@@ -1,0 +1,41 @@
+# SOLO を Fly.io で動かす設定。手順は DEPLOY.md
+# 大事: データは SQLite 1ファイルなので、機械(マシン)は必ず1台だけで動かす(2台にするとデータが分かれて壊れる)
+app = "solo-club"            # Fly.io の中での名前。空いていなければ変える
+primary_region = "nrt"       # 東京
+
+[env]
+  PORT = "8080"
+  DB_FILE = "/data/solo.db"
+  BACKUP_DIR = "/data/backups"
+  TRUST_PROXY = "1"
+  PUBLIC_URL = "https://solo-club.jp"
+
+[[mounts]]
+  source = "solo_data"
+  destination = "/data"
+  initial_size = "3gb"
+  auto_extend_size_threshold = 80      # 80%使ったら
+  auto_extend_size_increment = "1gb"   # 1GB ずつ広げる
+  auto_extend_size_limit = "10gb"      # 10GB まで
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = "off"    # 卓の中継(つなぎっぱなしの通信)があるので、止めない
+  auto_start_machines = true
+  min_machines_running = 1
+  [http_service.concurrency]
+    type = "connections"
+    soft_limit = 1500
+    hard_limit = 2000
+
+  [[http_service.checks]]
+    grace_period = "20s"
+    interval = "30s"
+    method = "GET"
+    path = "/api/health"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"

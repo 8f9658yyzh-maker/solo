@@ -18,6 +18,10 @@ const CFG = {
   BILLING: 0,                  // 有料プランの申し込みを受け付けるか(試験運用中は0)
   PRICE_PLAYER: 680,           // 一般プランの月額(円)
   PRICE_AJ: 1480,              // AJプランの月額(円)
+  PRICE_THEME: 300,            // 卓のテーマ1つの値段(円・買い切り)
+  PLAN_PEEK: 0,                // 有料プランの更新ごとに付ける手札確認チケットの枚数(0=付けない。弁護士の確認まで0)
+  AD_NET: 0,                   // 広告会社(Google AdSense)の広告も出すか(0=地元スポンサーだけ)
+  AD_GAP_MIN: 10,              // 全画面の広告の間隔(分)
 };
 class Err extends Error { constructor(m, code) { super(m); this.code = code || 400; } }
 const need = (c, m, code) => { if (!c) throw new Err(m, code); };
@@ -75,6 +79,7 @@ class Core {
     const r = this.db.prepare('INSERT INTO users(username,pass_hash,pass_salt,role,parent_id,phone_hash,created_at) VALUES(?,?,?,?,?,?,?)')
       .run(username, pre && pre.hash || this.hashPw(password, salt), salt, role, parent, phone ? this.hashPhone(this.normPhone(phone)) : null, Date.now());
     const id = Number(r.lastInsertRowid);
+    if (this.onUserCreated) this.onUserCreated(id);   // 登録時の同意(利用規約の版)を記録する。登録画面では「18歳以上・利用規約に同意」が必須
     if (role === 'aj') this._ensureHouse(id, username);
     return id;
   }
@@ -151,6 +156,8 @@ class Core {
     need(canGive(actor, t), 'この相手にはチップを渡せません', 403);
     need(t.status !== 'banned', '退会処分の相手には渡せません');
     need(this.acct(actor.id) !== this.acct(t.id), '作成者と統括責任者のポケットは共有です(渡す必要はありません)');
+    amount = Number(amount); need(Number.isInteger(amount) && amount > 0, 'チップは1以上の整数で入力してください');
+    need(this.L.balance(this.acct(actor.id)) >= amount, 'ポケットのチップが足りません');   // 台帳の側でも止まるが、利用者には「足りない」と返す(サーバーの故障として数えない)
     const tx = this.L.transfer(this.acct(actor.id), this.acct(t.id), amount, 'give', { actor: actor.id, note });
     this.D.audit(actor.id, 'give', t.id, { amount, tx });
     return { tx, balance: this.pocket(actor.id) };
@@ -158,6 +165,8 @@ class Core {
   pull(actor, fromId, amount, note) {
     const t = this.user(fromId); need(t, '相手が見つかりません', 404);
     need(canPull(actor, t), 'この相手のポケットからは引き取れません', 403);
+    amount = Number(amount); need(Number.isInteger(amount) && amount > 0, 'チップは1以上の整数で入力してください');
+    need(this.L.balance(this.acct(t.id)) >= amount, '相手のポケットのチップが足りません');
     const tx = this.L.transfer(this.acct(t.id), this.acct(actor.id), amount, 'pull', { actor: actor.id, note });
     this.D.audit(actor.id, 'pull', t.id, { amount, tx });
     this.notify(t.id, 'pulled', { by: actor.username, amount });
@@ -377,12 +386,16 @@ class Core {
       { key: 'billing', label: '有料プランの申し込み', unit: '1=受け付ける / 0=受け付けない', min: 0, max: 1, note: '0にしても、すでに入っている人のプランは止まりません(解約はStripeの画面から)' },
       { key: 'pricePlayer', label: '一般プランの月額', unit: '円', min: 100, max: 10000, note: '変えた後に申し込む人から新しい金額。すでに入っている人の金額は変わりません' },
       { key: 'priceAj', label: 'AJプランの月額', unit: '円', min: 100, max: 30000, note: '変えた後に申し込む人から新しい金額。すでに入っている人の金額は変わりません' },
-      { key: 'ads', label: '広告(テスト表示)', unit: '1=出す / 0=出さない', min: 0, max: 1, note: '本番の広告会社とはつないでいません。画面の位置とタイミングの確認用。ゲーム中の卓には出ません' }
+      { key: 'priceTheme', label: '卓のテーマの値段(買い切り)', unit: '円', min: 100, max: 5000, note: '1つあたり。有料プランの人は全部使える' },
+      { key: 'planPeek', label: 'プランの更新ごとの手札確認チケット', unit: '枚(0=付けない)', min: 0, max: 30, note: 'お金で勝負の情報を買う形にならないか、弁護士の確認が済むまでは0のままを推奨' },
+      { key: 'ads', label: '広告', unit: '1=出す / 0=出さない', min: 0, max: 1, note: 'ゲーム中の卓には出ません。有料プランの人と作成者・統括責任者には出ません' },
+      { key: 'adNet', label: '広告会社(Google AdSense)の広告', unit: '1=使う / 0=地元スポンサーだけ', min: 0, max: 1, note: 'サーバーに ADSENSE_CLIENT(広告会社の番号)を入れたときだけ働きます。スポンサーの広告が先に出ます' },
+      { key: 'adGapMin', label: '全画面の広告の間隔', unit: '分', min: 3, max: 120, note: '卓を出るときだけ出す。この時間は次を出さない' }
     ];
   }
   configValue(key) {
     const o = this.tablesOpt || {}, c = this.cfg;
-    return ({ feeBp: o.feeBp, jackpotBp: o.jackpotBp, jpRank: o.jpRank, jpLast: o.jpLast ? 1 : 0, shugiMin: o.shugiMin, turnSec: Math.round((o.turnMs || 40000) / 1000), voteSec: Math.round((o.voteMs || 60000) / 1000), minStayMin: Math.round((o.minStayMs == null ? 900000 : o.minStayMs) / 60000), disconnectSec: Math.round((o.disconnectGraceMs || 8000) / 1000), entryFee: o.entryFee ? 1 : 0, entryFirst: c.ENTRY_FEE_FIRST, entryNext: c.ENTRY_FEE_NEXT, minUnit: o.minUnit, graceMin: Math.round((o.graceMs || 300000) / 60000), nuisanceLimit: c.NUISANCE_LIMIT, noticeStep: c.FEE_NOTICE_STEP, chat: o.chatEnabled ? 1 : 0, ads: o.ads ? 1 : 0, billing: c.BILLING ? 1 : 0, pricePlayer: c.PRICE_PLAYER, priceAj: c.PRICE_AJ })[key];
+    return ({ feeBp: o.feeBp, jackpotBp: o.jackpotBp, jpRank: o.jpRank, jpLast: o.jpLast ? 1 : 0, shugiMin: o.shugiMin, turnSec: Math.round((o.turnMs || 40000) / 1000), voteSec: Math.round((o.voteMs || 60000) / 1000), minStayMin: Math.round((o.minStayMs == null ? 900000 : o.minStayMs) / 60000), disconnectSec: Math.round((o.disconnectGraceMs || 8000) / 1000), entryFee: o.entryFee ? 1 : 0, entryFirst: c.ENTRY_FEE_FIRST, entryNext: c.ENTRY_FEE_NEXT, minUnit: o.minUnit, graceMin: Math.round((o.graceMs || 300000) / 60000), nuisanceLimit: c.NUISANCE_LIMIT, noticeStep: c.FEE_NOTICE_STEP, chat: o.chatEnabled ? 1 : 0, ads: o.ads ? 1 : 0, billing: c.BILLING ? 1 : 0, pricePlayer: c.PRICE_PLAYER, priceAj: c.PRICE_AJ, priceTheme: c.PRICE_THEME, planPeek: c.PLAN_PEEK, adNet: c.AD_NET ? 1 : 0, adGapMin: c.AD_GAP_MIN })[key];
   }
   applyConfig(patch) {
     const o = this.tablesOpt, c = this.cfg;
@@ -391,13 +404,14 @@ class Core {
     if ('feeBp' in patch) o.feeBp = patch.feeBp; if ('entryFee' in patch) o.entryFee = !!patch.entryFee; if ('entryFirst' in patch) c.ENTRY_FEE_FIRST = patch.entryFirst; if ('entryNext' in patch) c.ENTRY_FEE_NEXT = patch.entryNext;
     if ('minUnit' in patch) o.minUnit = patch.minUnit; if ('graceMin' in patch) o.graceMs = patch.graceMin * 60000; if ('nuisanceLimit' in patch) c.NUISANCE_LIMIT = patch.nuisanceLimit; if ('noticeStep' in patch) c.FEE_NOTICE_STEP = patch.noticeStep; if ('chat' in patch) o.chatEnabled = !!patch.chat; if ('ads' in patch) o.ads = !!patch.ads;
     if ('billing' in patch) c.BILLING = patch.billing ? 1 : 0; if ('pricePlayer' in patch) c.PRICE_PLAYER = patch.pricePlayer; if ('priceAj' in patch) c.PRICE_AJ = patch.priceAj;
+    if ('priceTheme' in patch) c.PRICE_THEME = patch.priceTheme; if ('planPeek' in patch) c.PLAN_PEEK = patch.planPeek; if ('adNet' in patch) c.AD_NET = patch.adNet ? 1 : 0; if ('adGapMin' in patch) c.AD_GAP_MIN = patch.adGapMin;
   }
   loadConfig() { const r = this.db.prepare("SELECT v FROM meta WHERE k='config'").get(); if (r) { try { this.applyConfig(JSON.parse(r.v)); } catch (e) {} } }
   getConfig(actor) {
     need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403);
     const lg = this.db.prepare("SELECT v FROM meta WHERE k='config_log'").get();
-    const G = { feeBp: '手数料とジャックポット', jackpotBp: '手数料とジャックポット', jpRank: '手数料とジャックポット', jpLast: '手数料とジャックポット', shugiMin: '祝儀', entryFee: '参加費', entryFirst: '参加費', entryNext: '参加費', noticeStep: '参加費', turnSec: '卓の進行', voteSec: '卓の進行', graceMin: '卓の進行', minStayMin: '卓の進行', disconnectSec: '卓の進行', minUnit: '卓の作り方', nuisanceLimit: 'その他', chat: 'その他', ads: 'その他', billing: '有料プラン', pricePlayer: '有料プラン', priceAj: '有料プラン' };
-    const ORDER = ['手数料とジャックポット', '祝儀', '参加費', '卓の進行', '卓の作り方', '有料プラン', 'その他'];
+    const G = { feeBp: '手数料とジャックポット', jackpotBp: '手数料とジャックポット', jpRank: '手数料とジャックポット', jpLast: '手数料とジャックポット', shugiMin: '祝儀', entryFee: '参加費', entryFirst: '参加費', entryNext: '参加費', noticeStep: '参加費', turnSec: '卓の進行', voteSec: '卓の進行', graceMin: '卓の進行', minStayMin: '卓の進行', disconnectSec: '卓の進行', minUnit: '卓の作り方', nuisanceLimit: 'その他', chat: 'その他', ads: '広告', adNet: '広告', adGapMin: '広告', billing: '有料プラン', priceTheme: '有料プラン', planPeek: '有料プラン', pricePlayer: '有料プラン', priceAj: '有料プラン' };
+    const ORDER = ['手数料とジャックポット', '祝儀', '参加費', '卓の進行', '卓の作り方', '有料プラン', '広告', 'その他'];
     const items = this.configDefs().map(d => Object.assign({}, d, { group: G[d.key] || 'その他', value: this.configValue(d.key) })).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
     return { items, log: lg ? JSON.parse(lg.v) : [], maintenance: this.maintenance().on };
   }
