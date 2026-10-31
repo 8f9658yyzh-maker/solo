@@ -77,9 +77,9 @@ function createApp(opts) {
     if (m === 'GET' && p === '/api/health') return send(res, 200, health());
     // 最初の設定: 作成者がまだいないときだけ、合言葉(SETUP_CODE)を知っている人が作成者を作れる。パスワードをサーバーの設定やチャットに書かずに済む
     if (p === '/api/setup') {
-      const open = !!setupCode && !d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get();
-      if (m === 'GET') return send(res, 200, { needed: open });
-      need(open, '最初の設定は、もう終わっています', 400);
+      const done = !!d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get(), open = !!setupCode && !done;
+      if (m === 'GET') return send(res, 200, { needed: open, done, code: !!setupCode });   // 受け付けない理由が分かるように(作成者がいる / 合言葉がない・8文字未満)
+      need(open, done ? '最初の設定は、もう終わっています(作成者がいます)' : '合言葉が設定されていないか、8文字より短いため、最初の設定は使えません', 400);
       need(!limited('setup' + ip, 5, 600000), '試行が多すぎます。10分ほど待ってください', 429);
       const a = Buffer.from(String(body.code || '')), b = Buffer.from(setupCode);
       need(a.length === b.length && require('node:crypto').timingSafeEqual(a, b), '合言葉が違います', 403);
