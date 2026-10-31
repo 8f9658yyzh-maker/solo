@@ -170,13 +170,14 @@ function feeNote(full) {   // 座るときに、別にかかる参加費の説�
   if (p.until) return full ? '今の1時間は参加費を払い済みです。' : ' ・ 参加費は払い済み';
   return full ? `別に、参加費 ${fmt(p.next)}チップがポケットから引かれます(合計 ${fmt(p.next)}チップ以上、ポケットに必要)。` : ` ・ 別に参加費 ${fmt(p.next)}チップがポケットから引かれます`;
 }
+const keepNote = s => (s.leave !== 'allow' ? '\n\nこの卓では途中で卓のチップをポケットに戻せません。卓が終われば、チップは全部ポケットに戻ります。' : '');   // 途中退席できない卓(勝ち逃げを防ぐため)
 const jpNote = () => (S.me && S.me.rules && S.me.rules.jackpotBp > 0 ? '\n\n🎰 公平のため、途中から参加した人は、ジャックポットを「参加してから積み上がった分」までしか取れません。' : '');
 A.sit = async v => {
   const t = S.data.tables.find(x => x.id === Number(v)); if (!t) return;
   const s = t.settings; let buy = s.chips;
   if (s.startMode === 'free') {
     const min = s.ante + s.reserve + s.limit;
-    const x = await askText(`卓にいくら持ち込んで座りますか?(ポケット ${fmt(S.me.pocket)}チップ / 最低 ${fmt(min)}チップ${feeNote()})${jpNote()}`, String(Math.min(S.me.pocket, Math.max(min, 5000))), true);
+    const x = await askText(`卓にいくら持ち込んで座りますか?(ポケット ${fmt(S.me.pocket)}チップ / 最低 ${fmt(min)}チップ${feeNote()})${keepNote(s)}${jpNote()}`, String(Math.min(S.me.pocket, Math.max(min, 5000))), true);
     if (x == null) return; buy = Number(x);
   } else if (!(await askYes(`この卓は、${fmt(s.chips)}チップを${fmt(s.chips)}チップに替えて参加します。${feeNote(true)}${s.minPlayers}人そろうまで待ち、終了まで席を立てません。座りますか?${jpNote()}`, '座る'))) return;
   const r = await run(() => api('POST', '/api/tables/' + t.id + '/join', { buyIn: buy })); if (!r) return;

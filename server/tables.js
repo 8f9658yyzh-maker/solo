@@ -294,6 +294,8 @@ class Runtime {
     need(this.s.startMode === 'free', '条件開始の卓ではポケットと卓のチップを移せません');
     const i = this.seatOf(user.id); need(i >= 0, '着席していません');
     need(!this.inHand(i), 'ゲーム中は移せません。次のゲームの前に行ってください');
+    // 途中退席できない卓では、始まった後に卓のチップをポケットへ戻せない(勝った分だけ抜いて席に残る「勝ち逃げ」を防ぐ)。卓が終われば全部ポケットに戻る
+    need(!(dir !== 'in' && this.s.leave !== 'allow' && this.status === 'running'), 'この卓は途中退席ができないため、卓のチップをポケットに戻せません。卓が終わると、チップは全部ポケットに戻ります');
     amount = Math.floor(Number(amount)); need(Number.isInteger(amount) && amount > 0, '数を入力してください');
     const p = this.T.players[i];
     if (dir === 'in') { need(this.core.pocket(user.id) >= amount, 'ポケットが足りません'); this.persist(); this.L.transfer('u:' + user.id, this.acct(user.id), amount, 'chip_in', { actor: user.id, ref: 'table' + this.id }); p.pts += amount; }

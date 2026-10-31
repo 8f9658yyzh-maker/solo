@@ -201,5 +201,26 @@ const inv = W => W.c.L.check();
     assert.strictEqual(W.c.user(uid).status, 'banned', 'role=' + W.c.user(uid).role); assert.strictEqual(W.c.L.check().ok, true);
     ok('時間内に戻らないと迷惑行為として記録され、3回目で退会。チップは回収され、合計は一致');
   }
+  // ===== 勝ち逃げの防止: 途中退席できない卓では、始まった後に卓のチップをポケットへ戻せない =====
+  {
+    const W = world(), c = W.c, aj = c.user(W.aj);
+    const deny = W.T.get(W.T.create(aj, '退席なし卓', { seats: 4, ante: 10, minBet: 10, limit: 50 }).id);
+    assert.strictEqual(deny.s.leave, 'deny');
+    await deny.join(c.user(W.ps[0]), 3000);
+    deny.exchange(c.user(W.ps[0]), 'out', 100); assert.strictEqual(deny.T.players[deny.seatOf(W.ps[0])].pts, 2900);   // 始まる前(1人で待っている間)は戻せる
+    await deny.join(c.user(W.ps[1]), 3000); assert.strictEqual(deny.status, 'running');
+    const pocket = c.pocket(W.ps[0]);
+    thr(() => deny.exchange(c.user(W.ps[0]), 'out', 100), /ポケットに戻せません/);
+    assert.strictEqual(c.pocket(W.ps[0]), pocket); assert.strictEqual(deny.T.players[deny.seatOf(W.ps[0])].pts, 2900);
+    deny.exchange(c.user(W.ps[0]), 'in', 500); assert.strictEqual(deny.T.players[deny.seatOf(W.ps[0])].pts, 3400);   // 卓へ足すのはできる
+    W.T.stop(aj, deny.id); for (let k = 0; k < 200 && deny.status === 'running'; k++) await sleep(10);   // 止まるまで待つ
+    assert.strictEqual(deny.status, 'stopped'); assert.strictEqual(c.pocket(W.ps[0]), pocket - 500 + 3400); assert.ok(c.L.check().ok);
+    const allow = W.T.get(W.T.create(aj, '退席あり卓', { seats: 4, ante: 10, minBet: 10, limit: 50, leave: 'allow' }).id);
+    await allow.join(c.user(W.ps[2]), 3000); await allow.join(c.user(W.ps[3]), 3000); assert.strictEqual(allow.status, 'running');
+    allow.exchange(c.user(W.ps[2]), 'out', 100); assert.strictEqual(allow.T.players[allow.seatOf(W.ps[2])].pts, 2900);
+    W.T.stop(aj, allow.id); for (let k = 0; k < 200 && allow.status === 'running'; k++) await sleep(10);
+    assert.strictEqual(allow.status, 'stopped'); assert.ok(c.L.check().ok);
+    ok('途中退席できない卓では、始まった後に卓→ポケットへ戻せない(卓へ足すのはできる)。卓が終わると全部ポケットに戻る。退席できる卓では戻せる');
+  }
   console.log('\n全' + n + '項目 合格'); process.exit(0);
 })().catch(e => { console.error(e); process.exit(1); });
