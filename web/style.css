@@ -11,7 +11,7 @@ label small{font-weight:400;letter-spacing:.02em}
 #toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
 #toast.err{border-color:var(--red)}
 .page{max-width:520px;margin:0 auto;padding:0 16px 96px}
-.top{display:flex;align-items:center;justify-content:space-between;height:56px}
+.top{display:flex;align-items:center;justify-content:space-between;height:calc(56px + env(safe-area-inset-top,0px));padding:env(safe-area-inset-top,0px) 16px 0;margin:0 -16px;position:sticky;top:0;z-index:40;background:var(--bg)}   /* ホーム画面に追加したアプリでは、画面が時計や電池の帯の下まで広がるので、その分を空ける。上の帯は画面を動かしても残す */
 .brand{font-size:22px;font-weight:700;letter-spacing:.4em}
 .brand small{display:block;font-size:10px;font-weight:400;letter-spacing:.2em;color:var(--mute)}
 .card{border:1px solid var(--line2);background:var(--panel);border-radius:2px;padding:14px;margin:12px 0}
@@ -53,14 +53,14 @@ table.t td.r,table.t th.r{text-align:right}
 .chips{display:flex;flex-wrap:wrap;gap:6px}
 .chips button{height:34px;padding:0 12px;border:1px solid var(--line2);background:transparent;color:var(--soft);border-radius:2px;font-size:13px;font-weight:600;letter-spacing:.06em}
 .chips button.on{border-color:var(--gold);color:var(--gold)}
-.auth{max-width:380px;margin:0 auto;padding:40px 20px}
+.auth{max-width:380px;margin:0 auto;padding:calc(40px + env(safe-area-inset-top,0px)) 20px calc(40px + env(safe-area-inset-bottom,0px))}
 .logo{text-align:center;margin-bottom:24px}
 .logo b{display:block;font-size:44px;font-weight:700;letter-spacing:.5em;text-indent:.5em}
 .logo span{font-size:12px;letter-spacing:.3em;color:var(--mute)}
 .warn{padding:10px 12px;border:1px solid var(--red);background:rgba(184,50,42,.12);font-size:12px;line-height:1.6;border-radius:2px;color:#F0B7B2}
 .note{padding:10px 12px;background:#14263A;font-size:12px;line-height:1.6;color:#9FB4CC;border-radius:2px}
 /* ===== 卓の画面 ===== */
-.stagewrap{position:fixed;inset:0;background:var(--bg);overflow:hidden;display:flex;align-items:flex-start;justify-content:center}
+.stagewrap{position:fixed;inset:0;background:var(--bg);overflow:hidden;display:flex;align-items:flex-start;justify-content:center;padding:env(safe-area-inset-top,0px) 0 env(safe-area-inset-bottom,0px)}
 .stage{width:390px;height:844px;position:relative;transform-origin:top left;flex:none;font-family:inherit;overflow:hidden}
 .stage .act{cursor:pointer;transition:transform .08s}
 .stage .act:active{transform:scale(.97)}
@@ -103,3 +103,27 @@ table.t td.r,table.t th.r{text-align:right}
 /* 勝負の表示 */
 @keyframes sdslam { 0% { transform: scale(3) rotate(-8deg); opacity: 0; } 18% { transform: scale(1) rotate(-4deg); opacity: 1; } 24% { transform: scale(1.12) rotate(-4deg); } 30%, 80% { transform: scale(1) rotate(-4deg); opacity: 1; } 100% { transform: scale(1.3) rotate(-4deg); opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .jptrack { animation: none !important; left: 8px; } .jpgold, .jpbulb, .jpstar { animation: none !important; } }
+/* 特典(戦績・テーマ)と広告 */
+.kvs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0}
+.kv{border:1px solid var(--line);border-radius:2px;padding:8px;min-width:0}
+.kv .mute{display:block;font-size:11px;line-height:1.3}.kv b{font-size:18px;font-weight:600}
+h4.sub{margin:14px 0 6px;font-size:13px;letter-spacing:.14em;color:var(--gold);font-weight:600}h4.sub small{color:var(--mute);font-weight:400;letter-spacing:0;margin-left:6px}
+.bar{display:grid;grid-template-columns:68px 1fr 92px;gap:8px;align-items:center;font-size:12px;margin:3px 0}
+.bar .lb{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.bar .vl{text-align:right;white-space:nowrap}
+.bar .tr{position:relative;height:10px;background:#0A1626;border:1px solid var(--line);border-radius:2px}
+.bar .tr i{position:absolute;left:0;top:0;bottom:0;background:var(--teal)}.bar .tr u{position:absolute;top:-3px;bottom:-3px;border-left:2px dotted var(--gold)}
+.themes{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:10px}
+.theme{text-align:center;font-size:12px}.theme .nm{margin:4px 0}
+.theme .sw{width:100%;height:56px;border-radius:18px;border:6px solid transparent;position:relative}
+.theme.on .sw{outline:2px solid var(--gold);outline-offset:2px}
+.theme .lock{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:18px;background:rgba(0,0,0,.35);border-radius:12px}
+ul.perks{margin:4px 0 8px;padding-left:1.2em;font-size:14px;line-height:1.7}
+.adslot{margin:14px 0 4px}
+.adlabel{display:inline-block;font-size:10px;letter-spacing:.14em;color:var(--mute);border:1px solid var(--line2);border-radius:2px;padding:0 5px;margin-bottom:4px}
+.sponsor{all:unset;box-sizing:border-box;cursor:pointer;display:flex;gap:10px;align-items:center;width:100%;border:1px solid var(--line2);border-radius:3px;padding:8px;background:var(--panel)}
+.sponsor .tx{display:flex;flex-direction:column;min-width:0;font-size:14px;line-height:1.5}.sponsor.full{flex-direction:column;max-width:340px;padding:16px;text-align:center}
+.sponsor.full .tx{align-items:center}
+.adhouse{display:block;border:1px dashed var(--line2);border-radius:3px;padding:10px;color:var(--mute);font-size:12px;text-decoration:none;text-align:center}
+.adconsent{border:1px solid var(--line2);border-radius:3px;padding:10px;display:flex;flex-direction:column;gap:6px;font-size:13px}.adconsent a{color:var(--gold)}
+.adov{position:fixed;inset:0;z-index:999;background:#050D18;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px}
+.legal{text-align:center;margin:18px 0 0;font-size:11px}.legal a{color:var(--mute);margin:0 6px;white-space:nowrap}

@@ -10,6 +10,15 @@ const POS = {
   2: [[110, 120], [280, 120]],
   1: [[195, 62]]
 };
+// 卓のテーマ(見た目だけ。勝ち負けやチップには関係しない)。使えるかどうかはサーバーが決める(S.me.perks)
+const THEMES = {
+  classic: { felt: '#1A6A96 0%,#0F4C72 52%,#08283F 100%', rail: '#8A5A30 0%,#4A2C14 30%,#7A4C26 55%,#3A200E 80%,#6B4222 100%' },
+  kariyushi: { felt: '#C0503A 0%,#932E20 52%,#4A120B 100%', rail: '#3A2A22 0%,#1A110C 30%,#33241C 55%,#120B08 80%,#2B1E17 100%' },
+  yaeyama: { felt: '#22B0A0 0%,#13807A 52%,#06403A 100%', rail: '#D2AA70 0%,#8A6436 30%,#BE9258 55%,#6E4A22 80%,#A27A44 100%' },
+  tsuki: { felt: '#465166 0%,#2A3240 52%,#0F1319 100%', rail: '#D6DBE2 0%,#6E7681 30%,#B4BBC4 55%,#4A515B 80%,#9AA1AA 100%' },
+  kogane: { felt: '#2E2C22 0%,#17160F 52%,#050504 100%', rail: '#F2D27A 0%,#A97A22 30%,#E3BC5E 55%,#7A5512 80%,#C9A24B 100%' }
+};
+const thm = () => THEMES[(typeof S !== 'undefined' && S.me && S.me.perks && S.me.perks.theme) || 'classic'] || THEMES.classic;
 const HUES = ['#D98A9A', '#3FA7B5', '#5E9E78', '#9B86C8', '#D9835A', '#C8B25A', '#6FB3A3', '#7BA0E0'];
 const hueOf = n => { let h = 0; for (const c of String(n)) h = (h * 31 + c.codePointAt(0)) >>> 0; return HUES[h % HUES.length]; };
 const TAG = { BET: ['#C9A24B', '#0B1522'], CALL: ['#1C8196', '#fff'], UP: ['#B8322A', '#fff'], FOLD: ['#4A5A6E', '#EAF0F7'] };
@@ -36,7 +45,9 @@ const back2 = () => `<div style="width:26px;height:38px;border-radius:3px;${BACK
 
 function stageScale() {
   const st = $('.stage'); if (!st) return;
-  const sc = Math.min(window.innerWidth / 390, window.innerHeight / 844);
+  const wr = $('.stagewrap'), cs = wr ? getComputedStyle(wr) : null;   // 時計や電池の帯・下のバーの分をのぞいた高さに合わせる
+  const h = window.innerHeight - (cs ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) : 0);
+  const sc = Math.min(window.innerWidth / 390, h / 844);
   st.style.transform = `scale(${sc})`; st.style.marginLeft = Math.max(0, (window.innerWidth - 390 * sc) / 2) + 'px';
 }
 window.addEventListener('resize', () => { stageScale(); if (typeof fxAlign === 'function') fxAlign(); });
@@ -177,7 +188,7 @@ function tableHTML(v) {
     <button class="act" data-a="tMenu" aria-label="メニュー" style="width:40px;height:40px;border:1px solid #2A4262;border-radius:2px;background:transparent;color:#C9A24B"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square"><path d="M4 7h16M4 12h16M4 17h10"/></svg></button></div>
   <div style="position:relative;height:690px">
     ${jpTicker(v)}
-    <div style="position:absolute;left:16px;top:48px;width:358px;height:566px;border-radius:64px;border:16px solid transparent;background:repeating-radial-gradient(circle at 30% 20%,rgba(255,255,255,.025) 0 1px,transparent 1px 3px) padding-box,radial-gradient(ellipse at 50% 42%,#1A6A96 0%,#0F4C72 52%,#08283F 100%) padding-box,linear-gradient(135deg,#8A5A30 0%,#4A2C14 30%,#7A4C26 55%,#3A200E 80%,#6B4222 100%) border-box;box-shadow:0 0 0 1px rgba(201,162,75,.7),0 16px 34px rgba(0,0,0,.7),inset 0 0 0 2px ${rim},inset 0 0 50px rgba(0,0,0,.5),inset 0 4px 10px rgba(0,0,0,.6)"></div>
+    <div style="position:absolute;left:16px;top:48px;width:358px;height:566px;border-radius:64px;border:16px solid transparent;background:repeating-radial-gradient(circle at 30% 20%,rgba(255,255,255,.025) 0 1px,transparent 1px 3px) padding-box,radial-gradient(ellipse at 50% 42%,${thm().felt}) padding-box,linear-gradient(135deg,${thm().rail}) border-box;box-shadow:0 0 0 1px rgba(201,162,75,.7),0 16px 34px rgba(0,0,0,.7),inset 0 0 0 2px ${rim},inset 0 0 50px rgba(0,0,0,.5),inset 0 4px 10px rgba(0,0,0,.6)"></div>
     <div style="position:absolute;left:16px;width:358px;top:296px;text-align:center;font-size:72px;font-weight:700;letter-spacing:.45em;text-indent:.45em;color:rgba(234,240,247,.05)">SOLO</div>
     <div style="position:absolute;left:62px;width:266px;top:196px;display:flex;flex-direction:column;align-items:center;gap:8px;text-align:center">
       <button class="act" data-a="tSheet" data-v="rules" aria-label="卓の情報" style="all:unset;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent">
@@ -310,7 +321,7 @@ function peekHTML(v) {
   return `<div style="min-width:200px;padding:6px 10px;border-radius:2px;border:1px solid rgba(201,162,75,.6);background:rgba(5,13,24,.86)"><div style="font-size:11px;color:#C9A24B;letter-spacing:.1em;margin-bottom:2px">手札確認 ・ 券${k.count}（★は勝者）</div>${k.targets.map(row).join('')}</div>`;
 }
 A.tPeek = async v => { try { await TB.src.post('peek', { target: v }); } catch (x) { toast(x.message, true); } };
-const doAct = async a => { TB.ui.mode = null; if (TB.v) { TB.v.req = null; tableRender(); } await run(() => TB.src.act(a)); };
+const doAct = async a => { TB.ui.mode = null; const rid = TB.v && TB.v.req ? TB.v.req.rid : null; if (rid != null) a = Object.assign({ rid }, a); if (TB.v) { TB.v.req = null; tableRender(); } await run(() => TB.src.act(a)); };   // rid=どの番への操作か(古い画面・二重送信を防ぐ)
 A.tFold = () => doAct({ act: 'fold' });
 A.tJoin = () => doAct({ act: 'join' });
 A.tSkip = () => doAct({ act: 'skip' });
@@ -354,7 +365,7 @@ function practiceSetup() {
   <div class="grid2"><div><label>人数<small>(自分を含む)</small></label><select id="pr_n">${[3, 4, 5, 6, 7, 8].map(n => `<option ${n === PR.cfg.seats ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
   <div><label>アップ</label><select id="pr_up"><option value="1" ${PR.cfg.up ? 'selected' : ''}>あり</option><option value="0" ${PR.cfg.up ? '' : 'selected'}>なし</option></select></div></div>
   <div class="grid2"><div><label>参加料<small>(100以上)</small></label><input id="pr_a" type="number" value="${PR.cfg.ante}"></div><div><label>ベット上限</label><input id="pr_l" type="number" value="${PR.cfg.limit}"></div></div>
-  <button class="btn gold block" style="margin-top:14px" data-a="prStart">START <small>はじめる</small></button></div>${(S.me && RANK[S.me.user.role] <= 4) || window.__demoToken ? '<div class="card"><h3>SCENE<small>演出の確認</small></h3><div class="note">10ソロなどの場面を、数字や文字を入れて、動く画面で確かめられます(管理側だけに表示)。</div><button class="btn block" data-a="scOpen">演出の確認画面へ <small>SCENE</small></button></div>' : ''}</div>`;
+  <button class="btn gold block" style="margin-top:14px" data-a="prStart">START <small>はじめる</small></button></div>${(S.me && RANK[S.me.user.role] <= 4) || window.__demoToken ? '<div class="card"><h3>SCENE<small>演出の確認</small></h3><div class="note">10ソロなどの場面を、数字や文字を入れて、動く画面で確かめられます(管理側だけに表示)。</div><button class="btn block" data-a="scOpen">演出の確認画面へ <small>SCENE</small></button></div>' : ''}</div>${S.me ? tabBar('practice') : ''}`;
 }
 A.prStart = () => { PR.cfg = { seats: num('pr_n'), up: val('pr_up') === '1', ante: Math.max(100, num('pr_a') || 100), limit: Math.max(100, num('pr_l') || 1000) }; practiceRun(); };
 function practiceView() {

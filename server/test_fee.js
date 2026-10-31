@@ -25,7 +25,7 @@ function bot(W, rt, uid) {
   const b = { last: null, notes: [] };
   b.res = { write: s => { if (!s.startsWith('data: ')) return; const v = JSON.parse(s.slice(6)); b.last = v;
     if (v.req && !b.busy) { b.busy = true; setImmediate(() => { b.busy = false; if (!rt.pending || rt.pending.req.seat !== v.req.seat) return; const r = v.req;
-      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: Math.random() < 0.5 ? 'bet' : 'fold', amount: r.cap } : r.type === 'biki' ? { act: 'follow', up: 0 } : { act: Math.random() < 0.5 ? 'follow' : 'fold' };
+      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: Math.random() < 0.5 ? 'bet' : 'fold', amount: r.minBet } : r.type === 'biki' ? { act: 'follow', up: 0 } : { act: Math.random() < 0.5 ? 'follow' : 'fold' };
       try { rt.act(W.c.user(uid), a); } catch (e) {} }); } } };
   rt.subscribe(W.c.user(uid), b.res); b.stop = () => rt.unsubscribe(W.c.user(uid), b.res); return b;
 }
@@ -79,8 +79,13 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     for (let i = 0; i < 3; i++) assert.strictEqual(c.pocket(W.ps[i]), 20000 - 5000 - 1000);
     assert.strictEqual(c.L.balance('f:' + rt.id), 3000);
     ok('開始時にポケットから1,000チップずつ引かれ、卓の保管へ入った(卓のチップは引かれない)');
-    await sleep(2500);
+    // ロボットは最小額で賭ける(最大額だと乱数しだいで2人のチップが尽き、5〜6ゲームで止まることがあった)。決まった時間ではなく8ゲーム進むまで待つ
+    for (let i = 0; i < 150 && rt.T.gameNo < 8; i++) await sleep(100);
     assert.ok(rt.T.gameNo >= 8, 'ゲームが進む ' + rt.T.gameNo);
+    // ここから先は時刻を進めて参加費を確かめるので、全員の接続を切って卓を一時停止させてから進める(ゲームの最中はチップを移せないため)
+    bots.forEach(b => b.stop());
+    for (let i = 0; i < 150 && !(rt.paused && !rt.inGame); i++) await sleep(50);
+    assert.ok(rt.paused && !rt.gameActive(), '全員の接続が切れたら、今のゲームのあとで一時停止する');
     const rows = c.db.prepare('SELECT data FROM games WHERE table_id=?').all(rt.id).map(r => JSON.parse(r.data));
     let rake = 0, wins = 0;
     for (const d of rows) { if (d.how === 'nagashi') { assert.strictEqual(d.fee, 0); continue; } wins++; const gross = d.potWon + d.fee + d.cut + (d.jp ? d.jp.paid * 0 : 0); assert.strictEqual(d.fee, Math.ceil(gross * 100 / 10000)); assert.strictEqual(d.cut, Math.ceil(gross * 200 / 10000)); assert.ok(d.fee >= 1); rake += d.fee; }
@@ -89,18 +94,21 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     assert.strictEqual(c.db.prepare("SELECT COALESCE(SUM(amount),0) s FROM fee_log WHERE table_id=? AND kind='rake'").get(rt.id).s, rake);
     ok(`毎ゲームの手数料は場の3%(運営1%・積立2%、どちらも切り上げ)(${wins}ゲーム・合計${rake}チップ)。保管と記録が一致`);
     assert.ok(c.L.check().ok);
+    // ここからは、時刻だけを進めて参加費のしくみを確かめる。卓は全員の接続を切って止めてあるので、tick() は「ゲームが動いている卓」として参加費を見る
+    for (let k = 0; k < 100 && !(rt.paused || rt.idle); k++) await sleep(20);
+    const tick = t => { const p = rt.paused, d = rt.idle; rt.paused = rt.idle = false; try { rt.feeTick(t); } finally { rt.paused = p; rt.idle = d; } };
     // 時間: 55分後に、ポケットが足りない人にだけ5分前の通知
     c.pull ? 0 : 0;
     const low = W.ps[2]; const lowPocket = c.pocket(low); // 14000 → 足りなくする
     c.give; const sum0 = c.pocket(low);
     // ポケットを500まで減らす: 持ち込みを増やして減らす
     rt.exchange(c.user(low), 'in', sum0 - 500);
-    W.now += 55 * 60000; rt.feeTick(W.now);
+    W.now += 55 * 60000; tick(W.now);
     assert.strictEqual(notes(W, low, 'fee_warn').length, 1); assert.strictEqual(notes(W, W.ps[0], 'fee_warn').length, 0);
-    rt.feeTick(W.now + 1000); assert.strictEqual(notes(W, low, 'fee_warn').length, 1);
+    tick(W.now + 1000); assert.strictEqual(notes(W, low, 'fee_warn').length, 1);
     ok('期限の5分前、ポケットが足りない人にだけ通知(1回だけ)');
     // 期限: 足りる人は自動延長(2時間目=1,000)、足りない人は休み
-    W.now += 5 * 60000; rt.feeTick(W.now);
+    W.now += 5 * 60000; tick(W.now);
     assert.strictEqual(c.pocket(W.ps[0]), 20000 - 5000 - 2000); assert.strictEqual(c.L.balance('f:' + rt.id) >= 5000, true);
     assert.strictEqual(c.pocket(low), 500); assert.strictEqual(rt.T.players[rt.seatOf(low)].sitout, true);
     assert.strictEqual(notes(W, low, 'fee_blocked').length, 1);
@@ -112,11 +120,14 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     const played = c.db.prepare('SELECT data FROM games WHERE table_id=? AND no>?').all(rt.id, g0).map(r => JSON.parse(r.data));
     assert.ok(played.every(d => !d.parts.some(p => p.uid === low)), '休み中は参加しない');
     // AJがチップを入れると復帰
-    c.give(c.user(W.aj), low, 5000); rt.feeTick(W.now + 1000);
+    c.give(c.user(W.aj), low, 5000); tick(W.now + 1000);
     assert.strictEqual(rt.T.players[rt.seatOf(low)].sitout, false); assert.strictEqual(c.pocket(low), 5500 - 1000);
     ok('AJがポケットにチップを入れると、参加費が引かれて休みが解ける');
     // 3時間目は500
-    W.now += 3600000; rt.feeTick(W.now); assert.strictEqual(c.pocket(W.ps[0]), 20000 - 5000 - 2000 - 500);
+    W.now += 3600000; assert.ok(rt.paused || rt.idle, '全員の接続が切れて一時停止中'); rt.feeTick(W.now); assert.strictEqual(c.pocket(W.ps[0]), 20000 - 5000 - 2000);
+    ok('一時停止中(全員の接続が切れている)は、時間がたっても参加費を引かない');
+    rt.paused = false; rt.idle = false; rt.feeTick(W.now); assert.strictEqual(c.pocket(W.ps[0]), 20000 - 5000 - 2000 - 500);   // 再開したとき(3時間目は500)
+    rt.paused = true;
     // 受け取る
     const fee = c.L.balance('f:' + rt.id); assert.ok(fee >= 5000);
     assert.ok(notes(W, W.cid, 'fee_ready').length >= 1 && notes(W, W.sov, 'fee_ready').length >= 1, '5,000の通知');
@@ -136,10 +147,10 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     const W3 = world(), c3 = W3.c; const rt3 = W3.T.get(W3.T.create(c3.user(W3.aj), 'a', { ante: 100, minBet: 100, limit: 1000, leave: 'allow' }).id);
     await rt3.join(c3.user(W3.ps[0]), 5000); await rt3.join(c3.user(W3.ps[1]), 5000);
     const f1 = c3.L.balance('f:' + rt3.id); assert.strictEqual(f1, 2000);
-    await sleep(400); rt3.leave(c3.user(W3.ps[1]));
-    assert.strictEqual(c3.pocket(W3.ps[1]), 20000 - 1000);
+    await sleep(400); rt3.leave(c3.user(W3.ps[1])); for (let k = 0; k < 300 && rt3.seatOf(W3.ps[1]) >= 0; k++) await sleep(20);   // ゲーム中なら、そのゲームの後に席を立つ
+    assert.strictEqual(rt3.seatOf(W3.ps[1]), -1); const back = c3.pocket(W3.ps[1]); assert.ok(back >= 20000 - 1000 - 5000 && back <= 20000 - 1000 + 5000);   // 持ち込み5,000(その1ゲームの勝ち負け込み)がポケットへ戻る
     W3.now += 20 * 60000; await rt3.join(c3.user(W3.ps[1]), 5000); rt3.feeTick(W3.now);
-    assert.strictEqual(c3.L.balance('f:' + rt3.id) >= 2000 && c3.pocket(W3.ps[1]) === 20000 - 1000 - 5000, true);
+    assert.strictEqual(c3.L.balance('f:' + rt3.id) >= 2000 && c3.pocket(W3.ps[1]) === back - 5000, true);
     W3.T.stop(c3.user(W3.aj), rt3.id); await sleep(500);
     ok('席を立って戻っても、払い済みの1時間のうちは参加費を取られない');
   }
@@ -177,7 +188,7 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     const W = world(), c = W.c; const rt = W.T.get(W.T.create(c.user(W.aj), '条件卓B', { seats: 4, ante: 100, minBet: 100, limit: 1000, startMode: 'condition', chips: 20000, minPlayers: 2 }).id);
     c.give(c.user(W.aj), W.ps[0], 1000); c.give(c.user(W.aj), W.ps[1], 1000);
     await rt.join(c.user(W.ps[0])); await rt.join(c.user(W.ps[1]));
-    W.now += 30 * 60000; W.T.stop(c.user(W.aj), rt.id); await sleep(900);
+    W.now += 30 * 60000; W.T.stop(c.user(W.aj), rt.id); for (let k = 0; k < 300 && rt.status === 'running'; k++) await sleep(20);   // 今のゲームの後に終わる
     assert.strictEqual(c.entryDue(W.ps[0], W.now), 0, '残り30分は個人の時間として続く');
     const rt2 = W.T.get(W.T.create(c.user(W.aj), '自由卓C', { ante: 100, minBet: 100, limit: 1000 }).id);
     const before = c.pocket(W.ps[0]); await rt2.join(c.user(W.ps[0]), 5000);

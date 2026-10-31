@@ -45,6 +45,25 @@ function dlg(o) {
   });
 }
 const askText = (msg, def, numeric) => dlg({ msg, input: true, def, numeric, buttons: [{ label: 'OK', value: true, cls: 'gold' }] });
+// 写真を軽くする: 横 maxW px までに縮め、JPEG で maxLen 文字(約 maxLen×0.75 バイト)以下にする。サーバーの上限に収めるため
+function shrinkImage(file, maxW, maxLen) {
+  return new Promise((ok, ng) => {
+    const rd = new FileReader();
+    rd.onerror = () => ng(new Error('写真を読めませんでした'));
+    rd.onload = () => { const im = new Image(); im.onerror = () => ng(new Error('写真を読めませんでした')); im.onload = () => {
+      let q = 0.85, w = Math.min(maxW, im.width), out;
+      do { const c = document.createElement('canvas'); c.width = w; c.height = Math.round(im.height * w / im.width); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); out = c.toDataURL('image/jpeg', q); q -= 0.15; if (q < 0.4) { w = Math.round(w * 0.75); q = 0.8; } } while (out.length > maxLen && w > 120);
+      ok(out);
+    }; im.src = rd.result; };
+    rd.readAsDataURL(file);
+  });
+}
+// 写真を大きく見る(押すと閉じる)
+function photoView(images) {
+  const ov = document.createElement('div'); ov.className = 'dlg'; ov.style.overflowY = 'auto'; ov.style.alignItems = 'flex-start'; ov.style.background = 'rgba(0,0,0,.92)';
+  ov.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;max-width:720px;width:100%;margin:auto">${images.map(src => `<img src="${e(src)}" alt="" style="width:100%;border-radius:4px">`).join('')}<button class="btn block">閉じる</button></div>`;
+  ov.addEventListener('click', () => ov.remove()); document.body.appendChild(ov);
+}
 const askYes = (msg, label) => dlg({ msg, buttons: [{ label: label || 'はい', value: true, cls: 'gold' }] }).then(v => v === true);
 
 /* ---------- ログイン・登録 ---------- */
@@ -59,13 +78,31 @@ function authScreen(mode) {
     <label>パスワード<small>(8文字以上)</small></label><input id="f_pass" type="password" autocomplete="${su ? 'new-password' : 'current-password'}">
     ${su ? `<label>電話番号<small>(1つの電話番号につきアカウントは1つ)</small></label><input id="f_phone" inputmode="tel" autocomplete="tel" placeholder="09012345678">
     <p class="mute">電話番号は、1人が複数のアカウントを作るのを防ぐためだけに使います。画面には出ず、暗号化した値で保存します。<br>※ 現在のテスト版では、SMSでの本人確認はまだ行っていません。</p>
-    <label style="display:flex;gap:8px;align-items:flex-start;letter-spacing:0;font-weight:400;font-size:13px;color:var(--soft)"><input id="f_age" type="checkbox" style="width:20px;margin-top:2px">18歳以上であり、利用規約に同意します</label>` : ''}
+    <label style="display:flex;gap:8px;align-items:flex-start;letter-spacing:0;font-weight:400;font-size:13px;color:var(--soft)"><input id="f_age" type="checkbox" style="width:20px;margin-top:2px;flex:none"><span>18歳以上であり、<a href="/legal/terms" target="_blank" rel="noopener" style="color:#C9A24B">利用規約</a>と<a href="/legal/privacy" target="_blank" rel="noopener" style="color:#C9A24B">プライバシーポリシー</a>に同意します</span></label>` : ''}
     <button class="btn gold block" style="margin-top:16px" data-a="${su ? 'doSignup' : 'doLogin'}">${su ? 'SIGN UP <small>登録する</small>' : 'LOG IN <small>ログイン</small>'}</button>
     <button class="btn block" style="margin-top:8px;border:0;background:none" data-a="goAuth" data-v="${su ? 'login' : 'signup'}">${su ? 'ログインへ' : '招待コードをお持ちの方はこちら'}</button>
+    ${su ? '' : `<button class="btn block" style="margin-top:0;border:0;background:none;font-size:13px;color:var(--mute)" data-a="goAuth" data-v="reset">パスワードを忘れた方(再設定コードをお持ちの方)</button>`}
   </div>
-  <p class="mute" style="text-align:center">このゲームのチップは、お金には交換できません。</p></div>`;
+  <p class="mute" style="text-align:center">このゲームのチップは、お金には交換できません。</p>${legalLinks()}</div>`;
 }
 A.goAuth = v => go('#/' + v);
+/* 最初の設定: サーバーを置いた直後に1回だけ。作成者(5億チップの持ち主)を作る */
+function setupScreen() {
+  clearTimers();
+  $('#app').innerHTML = `<div class="auth"><div class="logo"><b>SOLO</b><span>最初の設定</span></div>
+  <div class="card"><h3>SETUP<small>作成者のアカウントを作る(1回だけ)</small></h3>
+    <p class="mute" style="margin-top:0">サーバーを置いたときに決めた合言葉を入れてください。ここで作った人が作成者になり、5億チップがポケットに入ります。</p>
+    <label>合言葉</label><input id="s_code" type="password" autocomplete="off">
+    <label>ユーザー名<small>(3〜20文字)</small></label><input id="s_user" autocomplete="username" autocapitalize="none">
+    <label>パスワード<small>(8文字以上)</small></label><input id="s_pass" type="password" autocomplete="new-password">
+    <label>電話番号</label><input id="s_phone" inputmode="tel" autocomplete="tel" placeholder="09012345678">
+    <button class="btn gold block" style="margin-top:16px" data-a="doSetup">作成者を作る</button></div>${legalLinks()}</div>`;
+}
+A.doSetup = async () => {
+  if (!(await run(() => api('POST', '/api/setup', { code: val('s_code'), username: val('s_user'), password: val('s_pass'), phone: val('s_phone') })))) return;
+  const r = await run(() => api('POST', '/api/login', { username: val('s_user'), password: val('s_pass'), deviceId: deviceId() }), '作成者を作りました。ようこそ'); if (!r) return go('#/login');
+  S.token = r.token; saveToken(r.token); go('#/home');
+};
 A.doLogin = async () => {
   const r = await run(() => api('POST', '/api/login', { username: val('f_user'), password: val('f_pass'), deviceId: deviceId() })); if (!r) return;
   S.token = r.token; saveToken(r.token); go('#/home');
@@ -73,7 +110,34 @@ A.doLogin = async () => {
 A.doSignup = async () => {
   if (!$('#f_age').checked) return toast('18歳以上であることへの同意が必要です', true);
   const r = await run(() => api('POST', '/api/signup', { invite: val('f_inv'), username: val('f_user'), password: val('f_pass'), phone: val('f_phone'), age18: true, deviceId: deviceId() })); if (!r) return;
-  toast('登録できました。ログインしてください'); go('#/login');
+  // 登録できたら、同じユーザー名とパスワードでそのままログインする(打ち直しで間違えないように)
+  const l = await run(() => api('POST', '/api/login', { username: val('f_user'), password: val('f_pass'), deviceId: deviceId() }), '登録できました。ようこそ');
+  if (!l) { toast('登録できました。ログインしてください'); return go('#/login'); }
+  S.token = l.token; saveToken(l.token); go('#/home');
+};
+/* パスワードの再設定: 上の立場の人からもらった「再設定コード」で、本人が新しいパスワードを決める */
+function resetScreen() {
+  clearTimers();
+  $('#app').innerHTML = `<div class="auth"><div class="logo"><b>SOLO</b><span>パスワードの再設定</span></div>
+  <div class="card"><h3>RESET<small>新しいパスワードを決める</small></h3>
+    <p class="mute" style="margin-top:0">パスワードを忘れたときは、あなたを招待した人(AJ・管理責任者・統括など)に「再設定コード」を出してもらってください。コードは24時間・1回だけ使えます。</p>
+    <label>再設定コード</label><input id="r_code" autocapitalize="characters" autocomplete="off">
+    <label>ユーザー名</label><input id="r_user" autocomplete="username" autocapitalize="none">
+    <label>新しいパスワード<small>(8文字以上)</small></label><input id="r_pass" type="password" autocomplete="new-password">
+    <button class="btn gold block" style="margin-top:16px" data-a="doReset">パスワードを変える</button>
+    <button class="btn block" style="margin-top:8px;border:0;background:none" data-a="goAuth" data-v="login">ログインへ</button></div>${legalLinks()}</div>`;
+}
+A.doReset = async () => {
+  if (!(await run(() => api('POST', '/api/password/reset', { code: val('r_code'), username: val('r_user'), password: val('r_pass') })))) return;
+  const l = await run(() => api('POST', '/api/login', { username: val('r_user'), password: val('r_pass'), deviceId: deviceId() }), 'パスワードを変えました'); if (!l) return go('#/login');
+  S.token = l.token; saveToken(l.token); go('#/home');
+};
+// 上の立場の人: 再設定コードを出す
+A.pwReset = async v => {
+  const [id, name] = v.split('|');
+  if (!(await askYes(`${name} さんのパスワードの「再設定コード」を出しますか?\n本人がこのコードで新しいパスワードを決めます(あなたにはパスワードは見えません)。前に出したコードは使えなくなります。`, '出す'))) return;
+  const r = await run(() => api('POST', '/api/password-resets', { userId: Number(id) })); if (!r) return;
+  await dlg({ msg: `再設定コード: ${r.code}\n\n${r.username} さんに、このコードとアドレスを送ってください。本人がログイン画面の「パスワードを忘れた方」から、コード・ユーザー名・新しいパスワードを入れます。\n\n使えるのは24時間・1回だけです。`, buttons: [{ label: '閉じる', value: true, cls: 'gold' }] });
 };
 
 /* ---------- 共通の枠(下のタブ) ---------- */
@@ -83,12 +147,19 @@ function tabsFor(me) {
   t.push(['notice', 'NOTICE', '通知']);
   return t;
 }
-function frame(inner) {
+// 下のタブ(ホーム・練習・ポケット・管理・通知)。練習の設定画面でも出す
+function tabBar(cur) {
   const m = S.me, tabs = tabsFor(m.user);
-  $('#app').innerHTML = `<div class="page"><div class="top"><div class="brand">SOLO<small>${e(m.user.username)} ・ ${ROLE_JA[m.user.role]}</small></div>
-    <span><button class="btn sm" data-a="bgmSheet" aria-label="BGMの曲">♫</button> <button class="btn sm" data-a="sfxToggle" aria-label="音">${typeof SFX !== 'undefined' && SFX.on ? (SFX.ctx && SFX.ctx.state === 'running' ? '♪ ON' : '♪ タップで有効') : '♪ OFF'}</button> <button class="btn sm" data-a="logout">LOG OUT<small style="display:none"></small></button></span></div>${noticeBanner()}${inner}${adBanner(S.tab)}</div>
-    <div class="tabs"><div class="tabs-in">${tabs.map(t => `<button class="${S.tab === t[0] ? 'on' : ''}" data-a="tab" data-v="${t[0]}">${t[1]}<small>${t[2]}</small>${t[0] === 'notice' && m.unread ? '<i class="dot"></i>' : ''}</button>`).join('')}</div></div>`;
+  return `<div class="tabs"><div class="tabs-in">${tabs.map(t => `<button class="${cur === t[0] ? 'on' : ''}" data-a="tab" data-v="${t[0]}">${t[1]}<small>${t[2]}</small>${t[0] === 'notice' && m.unread ? '<i class="dot"></i>' : ''}</button>`).join('')}</div></div>`;
 }
+function frame(inner) {
+  const m = S.me;
+  $('#app').innerHTML = `<div class="page"><div class="top"><div class="brand">SOLO<small>${e(m.user.username)} ・ ${ROLE_JA[m.user.role]}</small></div>
+    <span><button class="btn sm" data-a="bgmSheet" aria-label="BGMの曲">♫</button> <button class="btn sm" data-a="sfxToggle" aria-label="音">${typeof SFX !== 'undefined' && SFX.on ? (SFX.ctx && SFX.ctx.state === 'running' ? '♪ ON' : '♪ タップで有効') : '♪ OFF'}</button> <button class="btn sm" data-a="logout">LOG OUT<small style="display:none"></small></button></span></div>${noticeBanner()}${inner}${adBanner(S.tab)}${legalLinks()}</div>
+    ${tabBar(S.tab)}`;
+  if (typeof adFill === 'function') adFill();
+}
+const legalLinks = () => `<p class="legal"><a href="/legal/terms" target="_blank" rel="noopener">利用規約</a><a href="/legal/privacy" target="_blank" rel="noopener">プライバシー</a><a href="/legal/external" target="_blank" rel="noopener">外部送信</a><a href="/legal/tokushoho" target="_blank" rel="noopener">特定商取引法の表記</a></p>`;
 A.tab = v => { S.tab = v; if (v === 'practice') return go('#/practice'); renderHome(); };
 A.logout = async () => { await run(() => api('POST', '/api/logout', {})); S.token = null; saveToken(null); S.me = null; go('#/login'); };
 async function loadMe() { S.me = await api('GET', '/api/me'); return S.me; }
@@ -203,13 +274,16 @@ function planCard() {
     ${b.status === 'past_due' ? '<p class="redc" style="margin:0 0 6px">支払いができませんでした。下のボタンからカードを確かめてください。</p>' : ''}
     <button class="btn block" data-a="planPortal">解約・カードの変更 <small>Stripeの画面が開きます</small></button>`;
   else if (p.open) body = `<p style="margin:0 0 6px">${e(p.planName)}: <b>月${fmt(p.price)}円</b>(毎月自動で払います。いつでも解約できます)</p>
-    <p class="mute" style="margin:0 0 8px">チップは増えません。プランで変わるのは、広告が出なくなることなどです。${b ? '<br>前回の状態: ' + e(ST[b.status] || b.status) : ''}</p>
+    <ul class="perks"><li>広告が出なくなる</li><li>詳しい戦績(全期間・手役の内訳・日ごと・卓ごと)</li><li>卓のテーマがすべて使える</li></ul>
+    <p class="mute" style="margin:0 0 8px">チップは増えません。ゲーム中の情報が見えることもありません。変わるのは遊びの外側だけです。${b ? '<br>前回の状態: ' + e(ST[b.status] || b.status) : ''}</p>
     ${p.test ? '<p class="redc" style="margin:0 0 8px">テスト中です。本物のお金は動きません。カード番号は「4242 4242 4242 4242」を使ってください。</p>' : ''}
     <button class="btn gold block" data-a="planBuy">申し込む <small>Stripeの支払い画面へ</small></button>${b && b.portal ? '<button class="btn block" style="margin-top:8px" data-a="planPortal">支払いの記録を見る</button>' : ''}`;
   else body = '<p class="mute" style="margin:0">有料プランは準備中です。いまは全ての機能を無料で使えます。</p>';
   return `<div class="card"><h3>PLAN<small>有料プラン</small></h3>${body}</div>`;
 }
-A.planBuy = async (v, btn) => { if (btn) btn.disabled = true; const r = await run(() => api('POST', '/api/plan/checkout', {})); if (r && r.url) location.href = r.url; else if (btn) btn.disabled = false; };
+A.planBuy = async (v, btn) => {
+  const p = S.me.plan; if (!(await buyConfirm({ name: 'SOLO ' + p.planName + '(毎月の自動更新)', price: '月' + fmt(p.price) + '円(税込)', when: '申し込みの時に1か月分。その後は1か月ごとに自動で支払い', cancel: 'ポケットの画面からいつでも。支払い済みの期間の終わりまで使え、日割りの返金はありません' }))) return;
+  if (btn) btn.disabled = true; const r = await run(() => api('POST', '/api/plan/checkout', {})); if (r && r.url) location.href = r.url; else if (btn) btn.disabled = false; };
 A.planPortal = async (v, btn) => { if (btn) btn.disabled = true; const r = await run(() => api('POST', '/api/plan/portal', {})); if (r && r.url) location.href = r.url; else if (btn) btn.disabled = false; };
 async function plansCard() {
   let r; try { r = await api('GET', '/api/admin/plans'); } catch (x) { return ''; }
@@ -224,17 +298,18 @@ async function walletTab() {
   S.tab = 'wallet';
   const rows = await api('GET', '/api/ledger');
   const KIND = { give: '受け取り/配布', pull: '引き取り', buyin: '卓に持ち込み', cashout: '卓からポケットに戻す', chip_in: 'チップを追加', chip_out: 'チップをポケットに戻す', expel_return: '退会による返還', mint: '初期発行', supply_change: '総量の変更', game: 'ゲーム', recover: '復旧', recover_pot: '復旧', entry_fee: '参加費(1時間)', fee_receive: '手数料・参加費を受け取る' };
-  frame(`<div class="card"><div class="pocket"><div><div class="mute">POCKET ・ ポケット</div><div class="n">${fmt(S.me.pocket)}<span style="font-size:16px"> チップ</span></div></div>${S.me.pass && S.me.pass.exempt ? '<p class="mute">作成者と統括責任者のポケットは1つです(お二人で同じ残高)。参加費はかかりません。</p>' : ''}</div>
-  ${passCard()}${planCard()}
+  frame(`<div class="card"><div class="pocket"><div><div class="mute">POCKET ・ ポケット</div><div class="n">${fmt(S.me.pocket)}<span style="font-size:16px"> チップ</span></div></div></div>${S.me.pass && S.me.pass.exempt ? '<p class="mute" style="margin:8px 0 0">作成者と統括責任者のポケットは1つです(お二人で同じ残高)。参加費はかかりません。</p>' : ''}</div>
+  ${await statsCard()}${planCard()}${themeCard()}${passCard()}
   <div class="card"><h3>HISTORY<small>履歴(あなたに関係するものだけ)</small></h3>
-  ${rows.length ? `<table class="t"><tr><th>日時</th><th>内容</th><th class="r">増減</th></tr>${rows.map(r => `<tr><td class="mute">${new Date(r.ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td>${KIND[r.kind] || r.kind}${r.by ? ` <span class="mute">(${e(r.by)}が実行)</span>` : ''}<br><span class="mute">${e(r.counter)}${r.note ? ' ・ ' + e(r.note) : ''}</span></td><td class="r ${r.delta >= 0 ? 'tealc' : 'redc'}">${r.delta >= 0 ? '+' : ''}${fmt(r.delta)}</td></tr>`).join('')}</table>` : '<p class="mute">まだ履歴がありません。</p>'}</div>`);
+  ${rows.length ? `<table class="t"><tr><th>日時</th><th>内容</th><th class="r">増減</th></tr>${rows.map(r => `<tr><td class="mute">${new Date(r.ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td>${KIND[r.kind] || r.kind}${r.by ? ` <span class="mute">(${e(r.by)}が実行)</span>` : ''}<br><span class="mute">${e(r.counter)}${r.note ? ' ・ ' + e(r.note) : ''}</span></td><td class="r ${r.delta >= 0 ? 'tealc' : 'redc'}">${r.delta >= 0 ? '+' : ''}${fmt(r.delta)}</td></tr>`).join('')}</table>` : '<p class="mute">まだ履歴がありません。</p>'}</div>
+  ${adCfg().net ? '<p class="mute" style="text-align:center"><button class="btn sm" data-a="adReset">広告の設定(興味に合わせるか)を選び直す</button></p>' : ''}`);
 }
 
 /* ---------- 通知 ---------- */
 async function noticeTab() {
   S.tab = 'notice';
   const ns = await api('GET', '/api/notifications');
-  const T = { plan: n => '有料プラン: ' + e(n.msg), check: n => `「要チェック」 ${e(n.user)} さん(疑わしい行動 ${n.count}回・直近: ${e(n.last)})`, watch: n => `監視対象になりました: ${e(n.user)} さん(通報者${n.reporters}人)`, pulled: n => `${e(n.by)} があなたのポケットから ${fmt(n.amount)}チップを引き取りました`, limit_request: n => `卓の上限の申請: ${e(n.aj)}`, fee_ready: n => `卓${n.table}の手数料・参加費が ${fmt(n.balance)}チップになりました。管理の「手数料」から受け取れます`, fee_warn: n => `あと${n.minutes}分で参加費(${fmt(n.need)}チップ)が引かれます。ポケットは${fmt(n.pocket)}チップです。AJにチップを入れてもらってください`, fee_blocked: n => `ポケットに参加費(${fmt(n.need)}チップ)がないため、卓${n.table}でお休み中です。AJにチップを入れてもらうと再開します`, nuisance: n => `迷惑行為の記録: ${e(n.user)} さん(${n.count}回目)`, limit_result: n => n.approved ? `卓の上限が ${n.newLimit} になりました` : '卓の上限の申請は見送られました' };
+  const T = { plan: n => '有料プラン: ' + e(n.msg), check: n => `「要チェック」 ${e(n.user)} さん(疑わしい行動 ${n.count}回・直近: ${e(n.last)})`, watch: n => `監視対象になりました: ${e(n.user)} さん(通報者${n.reporters}人)`, pulled: n => `${e(n.by)} があなたのポケットから ${fmt(n.amount)}チップを引き取りました`, limit_request: n => `卓の上限の申請: ${e(n.aj)}`, fee_ready: n => `卓${n.table}の手数料・参加費が ${fmt(n.balance)}チップになりました。管理の「手数料」から受け取れます`, fee_warn: n => `あと${n.minutes}分で参加費(${fmt(n.need)}チップ)が引かれます。ポケットは${fmt(n.pocket)}チップです。AJにチップを入れてもらってください`, fee_blocked: n => `ポケットに参加費(${fmt(n.need)}チップ)がないため、卓${n.table}でお休み中です。AJにチップを入れてもらうと再開します`, nuisance: n => `迷惑行為の記録: ${e(n.user)} さん(${n.count}回目)`, limit_result: n => n.approved ? `卓の上限が ${n.newLimit} になりました` : '卓の上限の申請は見送られました', chipreq: n => `チップの申請: ${e(n.from)} さんから ${fmt(n.amount)}チップ(管理の画面で返事ができます)`, chipreq_done: n => n.ok ? `チップの申請(${fmt(n.amount)}チップ)を ${e(n.by)} さんが承認し、ポケットに入りました` : `チップの申請(${fmt(n.amount)}チップ)は見送られました` };
   frame(`<div class="card"><h3>NOTICE<small>通知</small></h3>${ns.length ? ns.map(n => `<div class="msgline" style="${n.read ? 'opacity:.6' : ''}">${(T[n.kind] || (() => e(n.kind)))(n.body)}<br><span class="mute">${new Date(n.ts).toLocaleString('ja-JP')}</span></div>`).join('') : '<p class="mute">通知はありません。</p>'}</div>`);
   if (S.me.unread) { await api('POST', '/api/notifications/read', {}); S.me.unread = 0; }
 }
@@ -247,7 +322,7 @@ function inviteCard(roles) {
 A.mkInvite = async () => { const r = await run(() => api('POST', '/api/invites', { role: val('inv_role') })); if (r) $('#inv_out').innerHTML = `<div class="big">${e(r.code)}</div><div class="mute">${ROLE_JA[r.role]}用のコードです。相手に伝えてください。</div>`; };
 function usersCard(users, title, opt) {
   opt = opt || {};
-  return `<div class="card"><h3>${title}</h3>${users.length ? `<table class="t"><tr><th>名前</th><th>立場</th><th class="r">ポケット</th><th></th></tr>${users.map(u => `<tr><td>${e(u.username)}${u.status !== 'active' ? ` <span class="pill red">${u.status === 'watch' ? '監視中' : '退会'}</span>` : ''}<br><span class="mute">${u.parent_name ? '直: ' + e(u.parent_name) : ''}</span></td><td>${ROLE_JA[u.role]}</td><td class="r gold">${fmt(u.balance)}</td><td class="r"><button class="btn sm" data-a="moveUser" data-v="${u.id}|${e(u.username)}">配る/引く</button></td></tr>`).join('')}</table>` : '<p class="mute">まだいません。招待コードで追加します。</p>'}</div>`;
+  return `<div class="card"><h3>${title}</h3>${users.length ? `<table class="t"><tr><th>名前</th><th>立場</th><th class="r">ポケット</th><th></th></tr>${users.map(u => `<tr><td>${e(u.username)}${u.status !== 'active' ? ` <span class="pill red">${u.status === 'watch' ? '監視中' : '退会'}</span>` : ''}<br><span class="mute">${u.parent_name ? '直: ' + e(u.parent_name) : ''}</span></td><td>${ROLE_JA[u.role]}</td><td class="r gold">${fmt(u.balance)}</td><td class="r"><button class="btn sm" data-a="moveUser" data-v="${u.id}|${e(u.username)}">配る/引く</button>${u.role === 'creator' ? '' : `<br><button class="btn sm" style="margin-top:4px" data-a="pwReset" data-v="${u.id}|${e(u.username)}">PW再設定</button>`}</td></tr>`).join('')}</table>` : '<p class="mute">まだいません。招待コードで追加します。</p>'}</div>`;
 }
 A.moveUser = async v => {
   const [id, name] = v.split('|');
@@ -256,6 +331,24 @@ A.moveUser = async v => {
   const r = await run(() => act.startsWith('p') ? api('POST', '/api/pull', { from: Number(id), amount: amt }) : api('POST', '/api/give', { to: Number(id), amount: amt }), '実行しました');
   if (r) adminTab();
 };
+/* チップの申請: AJ・管理責任者 → 自分を招待した人。プレイヤーからは申請できない(アプリの外の売り買いの窓口にしないため) */
+async function chipReqCard() {
+  let r; try { r = await api('GET', '/api/chip-requests'); } catch (x) { return ''; }
+  const ST = { open: '<span class="pill gold">返事待ち</span>', approved: '<span class="pill">承認</span>', declined: '<span class="pill">見送り</span>', canceled: '<span class="pill">取り消し</span>' };
+  const when = ts => new Date(ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  let h = '';
+  if (r.inbox.length || S.me.user.role !== 'aj') h += `<div class="card"><h3>CHIP REQUESTS<small>届いたチップの申請</small></h3>${r.inbox.length ? r.inbox.map(q => `<div class="tbl-item"><div class="nm"><b>${e(q.from_name)}</b> <span class="mute">${ROLE_JA[q.from_role] || ''}</span> ${ST[q.status] || ''}<br><b>${fmt(q.amount)}</b> チップ${q.note ? ` ・ <span class="mute">${e(q.note)}</span>` : ''}<br><span class="mute">${when(q.ts)}${q.reply ? ' ・ 返事: ' + e(q.reply) : ''}</span></div>
+    ${q.status === 'open' ? `<div style="text-align:right"><button class="btn sm gold" data-a="crYes" data-v="${q.id}">配る</button><br><button class="btn sm" style="margin-top:6px" data-a="crNo" data-v="${q.id}">見送る</button></div>` : ''}</div>`).join('') : '<p class="mute">届いた申請はありません。</p>'}<p class="mute">「配る」を押すと、あなたのポケットから相手のポケットへ移ります(台帳に記録)。</p></div>`;
+  if (r.canAsk) h += `<div class="card"><h3>ASK CHIPS<small>チップを申請する(あなたを招待した人へ)</small></h3>
+    <div class="row"><input id="cr_n" type="number" inputmode="numeric" placeholder="チップ" style="flex:1"><button class="btn gold" data-a="crAsk">申請する</button></div>
+    <input id="cr_note" maxlength="200" placeholder="理由(例: 卓を増やすため)" style="margin-top:8px">
+    ${r.mine.length ? `<table class="t" style="margin-top:8px"><tr><th>日時</th><th class="r">チップ</th><th>状態</th><th></th></tr>${r.mine.map(q => `<tr><td class="mute">${when(q.ts)}</td><td class="r">${fmt(q.amount)}</td><td>${ST[q.status] || ''}</td><td>${q.status === 'open' ? `<button class="btn sm" data-a="crCancel" data-v="${q.id}">取り消す</button>` : ''}</td></tr>`).join('')}</table>` : ''}</div>`;
+  return h;
+}
+A.crAsk = async () => { const n = Math.floor(Number(String(val('cr_n')).replace(/[,\s]/g, ''))); if (!(n >= 1)) return toast('チップの数を入れてください', true); if (await run(() => api('POST', '/api/chip-requests', { amount: n, note: val('cr_note') }), '申請しました')) adminTab(); };
+A.crYes = async v => { if (await askYes('この申請のチップを、あなたのポケットから配りますか?', '配る') && await run(() => api('POST', '/api/chip-requests/' + v + '/approve', {}), '配りました')) { S.me = await api('GET', '/api/me'); adminTab(); } };
+A.crNo = async v => { const r = await askText('見送る理由(相手に届きます。空欄でもかまいません)', ''); if (r != null && await run(() => api('POST', '/api/chip-requests/' + v + '/decline', { reply: r }), '見送りました')) adminTab(); };
+A.crCancel = async v => { if (await run(() => api('POST', '/api/chip-requests/' + v + '/cancel', {}), '取り消しました')) adminTab(); };
 async function adminTab() {
   S.tab = 'admin'; clearTimers();
   const me = S.me.user, role = me.role; let html = '';
@@ -266,24 +359,24 @@ async function adminTab() {
       <div class="grid2"><div><div class="mute">ハウスID(固定)</div><div class="big" style="font-size:28px">${e(h.houseId)}</div></div>
       <div><div class="mute">入室パスワード(5分で変わる)</div><div class="big" style="font-size:28px" id="pwv">${e(h.password)}</div><div class="mute" id="pwt"></div></div></div>
       <p class="mute">他のAJのプレイヤーが入るときに教えてください。あなたの直のプレイヤーは、招待コードで登録した時点でこのハウスにいます。</p></div>
-      ${inviteCard(['player'])}
+      ${inviteCard(['player'])}${await chipReqCard()}
       <div class="card"><h3>TABLES<small>卓 ${h.tables.length}/${h.tableLimit}</small></h3>
         ${h.tables.map(t => `<div class="tbl-item"><div class="nm"><b>${e(t.name)}</b><span class="mute">${e(settingsSummary(t.settings))}</span><br><span class="mute">${t.seated}/${t.seats}人 ${t.players.map(e).join(' ')}</span></div><div style="text-align:right"><button class="btn sm" data-a="editTable" data-v="${t.id}" ${t.seated ? 'disabled' : ''}>設定</button> <button class="btn sm red" data-a="stopTable" data-v="${t.id}">停止</button></div></div>`).join('') || '<p class="mute">卓はまだありません。</p>'}
         <button class="btn gold block" style="margin-top:8px" data-a="newTable">新しい卓 <small>NEW TABLE</small></button>
         <button class="btn block" style="margin-top:8px" data-a="reqLimit">卓の上限を上げる申請</button>
         <p class="mute">卓の設定は、誰かが座っている間は変更できません。上限は1ハウス${h.tableLimit}卓です(空の卓も数えます)。</p></div>
       <div id="tblform"></div>
-      <div class="card"><h3>MEMBERS<small>ハウスのメンバー</small></h3><table class="t"><tr><th>名前</th><th class="r">ポケット</th><th></th></tr>${h.members.filter(m => m.id !== me.id).map(m => `<tr><td>${e(m.username)}${m.direct ? ' <span class="pill gold">直</span>' : ' <span class="pill">来訪</span>'}</td><td class="r gold">${m.direct ? fmt(m.balance) : '-'}</td><td class="r">${m.direct ? `<button class="btn sm" data-a="moveUser" data-v="${m.id}|${e(m.username)}">配る/引く</button>` : `<button class="btn sm red" data-a="kick" data-v="${m.id}">外す</button>`}</td></tr>`).join('') || '<tr><td class="mute" colspan=3>まだメンバーがいません</td></tr>'}</table></div>`;
+      <div class="card"><h3>MEMBERS<small>ハウスのメンバー</small></h3><table class="t"><tr><th>名前</th><th class="r">ポケット</th><th></th></tr>${h.members.filter(m => m.id !== me.id).map(m => `<tr><td>${e(m.username)}${m.direct ? ' <span class="pill gold">直</span>' : ' <span class="pill">来訪</span>'}</td><td class="r gold">${m.direct ? fmt(m.balance) : '-'}</td><td class="r">${m.direct ? `<button class="btn sm" data-a="moveUser" data-v="${m.id}|${e(m.username)}">配る/引く</button><br><button class="btn sm" style="margin-top:4px" data-a="pwReset" data-v="${m.id}|${e(m.username)}">PW再設定</button>` : `<button class="btn sm red" data-a="kick" data-v="${m.id}">外す</button>`}</td></tr>`).join('') || '<tr><td class="mute" colspan=3>まだメンバーがいません</td></tr>'}</table></div>`;
     S.timers.push(setInterval(() => { const el = $('#pwt'); if (!el) return; const s = Math.max(0, Math.round((h.expiresAt - Date.now()) / 1000)); el.textContent = s ? `あと ${Math.floor(s / 60)}分${s % 60}秒` : '期限切れ(更新します)'; if (!s) adminTab(); }, 1000));
   } else if (role === 'manager') {
-    html += inviteCard(['aj']) + usersCard(users, 'AJ・プレイヤー<small>配る/引き取る(ポケットから配れるのはAJまで)</small>');
+    html += inviteCard(['aj']) + await chipReqCard() + usersCard(users, 'AJ・プレイヤー<small>配る/引き取る(ポケットから配れるのはAJまで)</small>');
     const lr = await api('GET', '/api/limit-requests');
     html += `<div class="card"><h3>LIMIT REQUESTS<small>卓の上限の申請(統括・作成者へ取り次ぎ)</small></h3>${lr.map(r => `<div class="tbl-item"><div class="nm"><b>${e(r.aj_name)}</b><span class="mute">${e(r.reason || '')}</span></div><button class="btn sm gold" data-a="fwdLimit" data-v="${r.id}">取り次ぐ</button></div>`).join('') || '<p class="mute">申請はありません。</p>'}</div>`;
     html += await watchCards();
   } else {  // 作成者・統括
     const lr = await api('GET', '/api/limit-requests');
     html += `<div class="card"><h3>TOTAL<small>チップの総量</small></h3><div class="pocket"><div class="n">${fmt(S.me.supply)}</div>${role === 'creator' ? '<button class="btn sm" data-a="chSupply">総量を変更</button>' : ''}</div><div id="chk" class="mute">検査中…</div></div>`;
-    html += await feesCard() + await plansCard() + maintCard() + await settingsCard() + await requestsCard();
+    html += await chipReqCard() + await feesCard() + await plansCard() + await salesCard() + await sponsorsCard() + maintCard() + await settingsCard() + await requestsCard();
     html += inviteCard(['sovereign', 'manager', 'aj', 'player']) + usersCard(users, 'ALL USERS<small>全員(配る/引き取る)</small>');
     html += `<div class="card"><h3>LIMIT REQUESTS<small>卓の上限の申請</small></h3>${lr.map(r => `<div class="tbl-item"><div class="nm"><b>${e(r.aj_name)}</b><span class="mute">${e(r.reason || '')}</span></div><button class="btn sm gold" data-a="decLimit" data-v="${r.id}">決める</button></div>`).join('') || '<p class="mute">申請はありません。</p>'}</div>`;
     html += await watchCards();
@@ -336,10 +429,23 @@ async function requestsCard() {
   return `<div class="card"><h3>REQUESTS<small>変更の要望(ここをこうしたい)</small></h3>
   <p class="mute" style="margin-top:0">新しい機能の追加や、なくしたい機能、仕組みの変更は、ここに書いて控えておけます。仕組み自体の変更は、アプリの中では書き換えられないので、この控えをもとに開発側(Claude)が作ります。状態を「未・対応中・済・なし」で管理できます。</p>
   <textarea id="rq_body" rows="3" maxlength="1000" placeholder="例: 卓の画面に〇〇を追加したい / △△の機能はなくしたい"></textarea>
+  <label for="rq_img">写真<small>(3枚まで。画面の写真もそのまま選べます。自動で軽くします)</small></label><input id="rq_img" type="file" accept="image/*" multiple>
+  <div id="rq_prev" class="row" style="flex-wrap:wrap;margin-top:6px"></div>
   <button class="btn gold block" style="margin-top:8px" data-a="rqAdd">控える</button>
-  ${rows.map(r => `<div class="msgline"><span class="mute">#${r.id} ${new Date(r.ts).toLocaleDateString('ja-JP')} ${e(r.username)}</span> <span class="pill ${r.status === '済' ? 'gold' : ''}">${e(r.status)}</span><br>${e(r.body)}<div class="row" style="margin-top:6px">${['未', '対応中', '済', 'なし'].map(st => `<button class="btn sm" data-a="rqSet" data-v="${r.id}|${st}">${st}</button>`).join('')}</div></div>`).join('')}</div>`;
+  ${rows.map(r => `<div class="msgline"><span class="mute">#${r.id} ${new Date(r.ts).toLocaleDateString('ja-JP')} ${e(r.username)}</span> <span class="pill ${r.status === '済' ? 'gold' : ''}">${e(r.status)}</span><br>${e(r.body)}${r.nimg ? `<br><button class="btn sm" style="margin-top:6px" data-a="rqImgs" data-v="${r.id}">📷 写真${r.nimg}枚を見る</button>` : ''}<div class="row" style="margin-top:6px">${['未', '対応中', '済', 'なし'].map(st => `<button class="btn sm" data-a="rqSet" data-v="${r.id}|${st}">${st}</button>`).join('')}</div></div>`).join('')}</div>`;
 }
-A.rqAdd = async () => { const b = val('rq_body').trim(); if (!b) return toast('内容を入力してください', true); if (await run(() => api('POST', '/api/requests', { body: b }), '控えました')) adminTab(); };
+A.rqAdd = async () => {
+  const b = val('rq_body').trim(), images = S.data.rqImgs || [];
+  if (!b && !images.length) return toast('内容を入力するか、写真を付けてください', true);
+  if (await run(() => api('POST', '/api/requests', { body: b, images }), '控えました')) { S.data.rqImgs = []; adminTab(); }
+};
+A.rqImgs = async v => { const r = await run(() => api('GET', '/api/requests/' + v + '/images')); if (r && r.images.length) photoView(r.images); };
+document.addEventListener('change', async ev => {
+  if (ev.target.id !== 'rq_img') return;
+  const files = [...ev.target.files].slice(0, 3); if (ev.target.files.length > 3) toast('写真は3枚までです。最初の3枚を使います', true);
+  try { S.data.rqImgs = await Promise.all(files.map(f => shrinkImage(f, 1280, 380000))); } catch (x) { S.data.rqImgs = []; return toast(x.message, true); }
+  $('#rq_prev').innerHTML = S.data.rqImgs.map(src => `<img src="${src}" alt="" style="width:72px;height:72px;object-fit:cover;border-radius:3px;border:1px solid #2A4262">`).join('');
+});
 A.rqSet = async v => { const [id, st] = v.split('|'); if (await run(() => api('POST', '/api/requests/' + id, { status: st }))) adminTab(); };
 async function feesCard() {
   let rows = []; try { rows = await api('GET', '/api/fees'); } catch (x) { return ''; }
@@ -381,24 +487,3 @@ A.saveTable = async v => {
   const r = await run(() => v ? api('PATCH', '/api/tables/' + v, { name: val('tf_name'), settings }) : api('POST', '/api/tables', { name: val('tf_name') || '卓', settings }), '保存しました');
   if (r) adminTab();
 };
-
-/* ---------- 広告(テスト表示) ----------
-   本番の広告会社にはつないでいない。置く場所とタイミングを確かめるための仮の画面。
-   ルール: ①ゲーム中の卓の画面には出さない ②全画面の広告は卓を出るときだけ。10分に1回まで ③作成者・統括責任者は「広告なし」 ④チップの景品にはしない(総量が決まっているため) */
-const adOn = () => !!(S.me && S.me.ads) && !(S.me.user && (S.me.user.role === 'creator' || S.me.user.role === 'sovereign')) && !S.me.adFree;
-function adBanner(tab) {
-  if (!adOn() || !['home', 'pocket', 'notice'].includes(tab)) return '';
-  return `<div style="margin:14px 0 4px;border:1px dashed #3B5674;border-radius:3px;background:rgba(20,40,64,.5);height:58px;display:flex;align-items:center;justify-content:center;gap:10px;color:#8FA6BE;font-size:12px;letter-spacing:.08em"><span style="padding:1px 6px;border:1px solid #3B5674;border-radius:2px;font-size:10px">AD</span>広告枠(テスト表示) ・ ${e(tab)}</div>`;
-}
-function adCapped() { try { const t = Number(localStorage.getItem('adLast') || 0); return Date.now() - t < 10 * 60000; } catch (x) { return false; } }
-function adShow(slot, done) {
-  if (!adOn() || adCapped()) return done();
-  try { localStorage.setItem('adLast', String(Date.now())); } catch (x) {}
-  const ov = document.createElement('div'); ov.id = 'adov';
-  ov.style.cssText = 'position:fixed;inset:0;z-index:999;background:#050D18;color:#EAF0F7;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center';
-  let left = 15;
-  const paint = () => { ov.innerHTML = `<div style="font-size:11px;letter-spacing:.3em;color:#8FA6BE">AD ・ 広告(テスト表示)</div><div style="width:300px;height:170px;border:1px dashed #3B5674;border-radius:4px;display:flex;align-items:center;justify-content:center;color:#5F7690;font-size:13px">動画広告の場所<br>(${e(slot)})</div><div style="width:300px;height:4px;background:#1B2D44"><div style="height:4px;background:#C9A24B;width:${(15 - left) / 15 * 100}%"></div></div><button id="adx" ${left > 10 ? 'disabled' : ''} style="height:44px;padding:0 24px;border:1px solid #C9A24B;border-radius:2px;background:transparent;color:#C9A24B;font-size:14px;font-weight:600;letter-spacing:.14em;opacity:${left > 10 ? .4 : 1}">${left > 10 ? (left - 10) + '秒後にスキップできます' : 'スキップ ▶'}</button>`; const b = ov.querySelector('#adx'); if (b) b.onclick = fin; };
-  const fin = () => { clearInterval(iv); ov.remove(); done(); };
-  const iv = setInterval(() => { left--; if (left <= 0) return fin(); paint(); }, 1000);
-  paint(); document.body.appendChild(ov);
-}

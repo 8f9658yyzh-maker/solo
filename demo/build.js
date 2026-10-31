@@ -4,9 +4,11 @@ const fs = require('fs'), path = require('path');
 const root = path.join(__dirname, '..'), rd = f => fs.readFileSync(path.join(root, f), 'utf8');
 const wasm = fs.readFileSync(process.env.SQLITE_WASM || '/tmp/swx/sqlite-wasm/src/bin/sqlite3.wasm').toString('base64');
 let sq = fs.readFileSync(process.env.SQLITE_MJS || '/tmp/swx/sqlite-wasm/src/bin/sqlite3.mjs', 'utf8');
-sq = sq.replace(/import\.meta\.url/g, "'http://demo.invalid/'").replace('export default sqlite3InitModule;', 'window.sqlite3InitModule = sqlite3InitModule;');
-const defs = ['db', 'ledger', 'core', 'tables', 'billing', 'index'].map(n => `window.__DEFS['./${n}']=function(module,exports,require,__dirname){${rd('server/' + n + '.js')}\n};`).join('\n');
-let app = ['web/app.js', 'web/table.js', 'web/scene.js', 'web/boot.js'].map(rd).join('\n;\n');
+sq = sq.replace(/import\.meta\.url/g, "'http://demo.invalid/'").replace('export default sqlite3InitModule;', 'window.sqlite3InitModule = sqlite3InitModule;')
+  .replace(/export\s*\{\s*sqlite3InitModule as default[^}]*\};?/, 'window.sqlite3InitModule = sqlite3InitModule;');   // 新しい版(npm の dist/index.mjs)の書き方
+if (/^export\s/m.test(sq)) throw new Error('SQLite の部品に export が残っています');
+const defs = ['db', 'ledger', 'core', 'tables', 'billing', 'perks', 'stats', 'ads', 'chipreq', 'legal', 'index'].map(n => `window.__DEFS['./${n}']=function(module,exports,require,__dirname){${rd('server/' + n + '.js')}\n};`).join('\n');
+let app = ['web/app.js', 'web/table.js', 'web/scene.js', 'web/perks.js', 'web/ads.js', 'web/boot.js'].map(rd).join('\n;\n');
 const tk = "try { S.token = localStorage.getItem('solo_tok'); } catch (x) {}";
 if (!app.includes(tk)) throw new Error('boot.js の token 行が見つかりません');
 app = app.replace(tk, 'S.token = window.__demoToken || null;');

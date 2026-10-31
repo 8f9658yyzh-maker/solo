@@ -11,13 +11,15 @@ const DEFAULTS = {
   startMode: 'free',        // free=自由 / condition=条件開始
   chips: 20000,             // 条件開始: 全員このチップで開始
   minPlayers: 4,            // 条件開始: この人数がそろったら開始
-  durationMin: 0,           // 0=時間で終わらない
+  durationMin: 120,         // 0=時間で終わらない(途中退席なしの卓では0にできない)
   endZero: 0,               // 0=なし / N=N人がゲームに出られなくなったら終了
   lateJoin: 'allow',        // allow / deny / vote
   leave: 'deny',            // allow / deny
   chat: true,
   shugiMul: 1,              // 祝儀 = 参加料 × ソロの数字 × この倍率(0=祝儀なし)
 };
+// 途中退席なしの卓で終わりが決まっていないと、AJが止めるまで誰も席を立てない(チップも持ち出せない)
+const needEnd = s => need(s.leave === 'allow' || s.durationMin > 0, '途中退席なしの卓は、時間(分)を決めてください。決めないと、AJが止めるまで誰も席を立てなくなります');
 function normSettings(raw, prev, minUnit, shugiMin) {
   minUnit = Math.max(1, Math.floor(Number(minUnit) || 1));   // アプリ全体の最小単位(参加料・最低ベットはこれ以上)
   const s = Object.assign({}, DEFAULTS, prev || {}, raw || {});
@@ -83,6 +85,7 @@ class Runtime {
     const set = this.subs.get(user.id); if (set) { set.delete(res); if (!set.size) this.subs.delete(user.id); }
     const i = this.seatOf(user.id);
     if (i >= 0 && !this.subs.get(user.id)) {
+      this.seats[i].discAt = Date.now();
       setTimeout(() => { // 少し待っても戻らなければ離席扱い。順番が来ていれば自動で降りる
         const j = this.seatOf(user.id);
         if (j >= 0 && !this.subs.get(user.id)) { this.seats[j].away = true; this.addLog(`${user.username}は接続が切れたため離席扱いです`, 'info'); this.autoFoldPending(j); this.broadcast(); }
@@ -111,7 +114,8 @@ class Runtime {
     const showHands = g && (g.phase === 'showdown' || g.phase === 'done') && g.result && (g.result.how === 'show' || g.result.how === 'jackpot') || (g && g.phase === 'showdown') || !!(g && g.result && g.result.jp && g.result.jp.reveal);
     const handOf = s => {
       if (!g || !g.hands[s]) return null;
-      if (s === i || spectator) return g.hands[s];
+      if (s === i) return g.hands[s];
+      if (spectator && (this.M.opt.liveHands || g.phase === 'done')) return g.hands[s];
       if (showHands && g.revealed.includes(s)) return g.hands[s];
       return null;
     };
@@ -205,7 +209,7 @@ class Runtime {
     need(idx >= 0, '満席です');
     this.L.transfer('u:' + user.id, this.acct(user.id), chips, 'buyin', { actor: user.id, ref: 'table' + this.id });
     this.seats[idx] = { userId: user.id, username: user.username, joinedAt: Date.now(), away: false, manualAway: false, timeouts: 0 };
-    Object.assign(this.T.players[idx], { pts: chips, vacant: false, name: user.username }); Solo.jpForget(this.T, idx);   // 途中参加は、参加してからの積み上がり分だけが対象
+    Object.assign(this.T.players[idx], { pts: chips, vacant: false, name: user.username, sitout: false }); Solo.jpForget(this.T, idx); this.forgetSeat(idx);   // 途中参加は、参加してからの積み上がり分だけが対象
     this.M.userTable.set(user.id, this.id);
     this.addLog(`${user.username}が着席しました`, 'info');
     this.checkSharedDevice(user);
@@ -262,16 +266,20 @@ class Runtime {
   leave(user) {
     const c = this.leaveCheck(user.id); need(c.ok, c.why);
     const i = this.seatOf(user.id);
-    if (this.inHand(i) || this.T.pot > 0 && this.status === 'running') { this.seats[i].leaveQueued = true; this.addLog(`${user.username}は、このゲームの後に退席します`, 'info'); this.broadcast(); return { queued: true }; }
+    if (this.mustWait(i)) { this.seats[i].leaveQueued = true; this.addLog(`${user.username}は、このゲームの後に退席します`, 'info'); this.broadcast(); return { queued: true }; }
     this.removeSeat(i, 'leave'); return { left: true };
   }
+  // 今すぐ席を外せないとき(ゲーム中・次のゲームの準備中・流しで場に自分の分が残っている)
+  mustWait(i) { return this.inHand(i) || !!this.inGame || (this.status === 'running' && this.T.pot > 0 && !!this.T.carry && this.T.carry.survivors.includes(i)); }
+  forgetSeat(i) { delete this.T.stake[i]; if (this.T.carry) this.T.carry.survivors = this.T.carry.survivors.filter(s => s !== i); }   // 席を立った人の、場の持ち分(流しで残った扱い)はなくなる
+  flushLeaves() { this.seats.forEach((st, i) => { if (st && st.leaveQueued && !this.mustWait(i)) { st.leaveQueued = false; try { this.removeSeat(i, st.evicted ? 'evict' : 'leave'); } catch (e) { console.error(e); } } }); }
   removeSeat(i, why) {
     const st = this.seats[i]; if (!st) return;
-    const p = this.T.players[i], amount = p.pts;
+    const p = this.T.players[i];
     this.persist();   // 台帳と一致させてから返す
     const bal = this.L.balance(this.acct(st.userId));
     if (bal > 0) this.L.transfer(this.acct(st.userId), 'u:' + st.userId, bal, 'cashout', { actor: st.userId, ref: 'table' + this.id, note: why });
-    Object.assign(p, { pts: 0, vacant: true, name: '' }); Solo.jpForget(this.T, i); this.seats[i] = null; this.M.userTable.delete(st.userId);
+    Object.assign(p, { pts: 0, vacant: true, name: '', sitout: false }); Solo.jpForget(this.T, i); this.forgetSeat(i); this.seats[i] = null; this.M.userTable.delete(st.userId);
     this.addLog(`${st.username}が退席しました`, 'info');
     const set = this.subs.get(st.userId); if (set) for (const r of set) { try { r.write('data: ' + JSON.stringify({ id: this.id, kicked: true, why }) + '\n\n'); } catch (e) {} }
     this.broadcast();
@@ -297,7 +305,11 @@ class Runtime {
     amount = Math.floor(Number(amount)); need(Number.isInteger(amount) && amount > 0, '数を入力してください');
     const p = this.T.players[i];
     if (dir === 'in') { need(this.core.pocket(user.id) >= amount, 'ポケットが足りません'); this.persist(); this.L.transfer('u:' + user.id, this.acct(user.id), amount, 'chip_in', { actor: user.id, ref: 'table' + this.id }); p.pts += amount; }
-    else { need(p.pts >= amount, 'チップが足りません'); this.persist(); this.L.transfer(this.acct(user.id), 'u:' + user.id, amount, 'chip_out', { actor: user.id, ref: 'table' + this.id }); p.pts -= amount; }
+    else {
+      need(!this.inGame || (this.T.g && this.T.g.phase !== 'done' && !this.T.g.parts.includes(i)), '次のゲームの準備中は、ポケットへ戻せません。少し待ってから行ってください');
+      need(!(this.T.pot > 0 && this.T.carry && this.T.carry.survivors.includes(i)), '流しで場に残っている間は、ポケットへ戻せません。次のゲームの決着の後に行ってください');
+      if (this.status === 'running') { const c = this.leaveCheck(user.id); need(c.ok, 'ポケットへ戻せません: ' + c.why + '(席を立てない間は、チップも持ち出せません)'); }
+      need(p.pts >= amount, 'チップが足りません'); this.persist(); this.L.transfer(this.acct(user.id), 'u:' + user.id, amount, 'chip_out', { actor: user.id, ref: 'table' + this.id }); p.pts -= amount; }
     this.broadcast();
   }
   say(user, body) {
@@ -327,11 +339,13 @@ class Runtime {
   // ---- 参加費(時間ごと。ポケットから引く) ----
   feeTick(now) {
     const M = this.M; if (!M.opt.entryFee || this.status !== 'running') return;
+    const quiet = this.paused || this.idle;   // 一時停止中・ゲームができない間(遊べる人が2人未満)は、休みから戻ろうとしている人の分だけ引く
     now = now || this.now(); const core = this.core; let changed = false;
     this.seats.forEach((st, i) => {
       if (!st) return;
       const u = core.user(st.userId); if (!u || u.role === 'creator' || u.role === 'sovereign') return;
       const pl = this.T.players[i], p = core.passRow(st.userId, now);
+      if (quiet && !pl.sitout) return;
       if (p.paid_until > now) {   // 払い済みの時間の中
         if (pl.sitout) { pl.sitout = false; st.blocked = false; changed = true; }
         if (p.paid_until - now <= M.opt.feeWarnMs && !st.manualAway && p.warned_for !== p.paid_until) {
@@ -375,7 +389,9 @@ class Runtime {
     const pass = req.type === 'carryJoin' ? { act: 'skip' } : { act: 'fold' };   // 流しの次の試合は、応答がなければ見送り(払わない)
     // チップが足りない人には、離席中でも猶予時間(既定5分)を渡す。その間にAJからチップをもらって戻れる。
     if (!st) return pass;
-    if (!req.short && (st.away || !this.connected(i))) { this.addLog(`${st.username}は離席中のため、自動で${req.type === 'carryJoin' ? '見送り' : '降り'}ました`, 'fold'); return pass; }
+    req.rid = this.rid = (this.rid || 0) + 1;   // 操作番号(古い画面からの操作・二重送信を、次の番に使わないため)
+    const gone = !this.connected(i) && Date.now() - (st.discAt || st.joinedAt) >= this.M.opt.disconnectGraceMs;   // 一瞬の切断(電波・アプリの切り替え)では降ろさない
+    if (!req.short && (st.away || gone)) { this.addLog(`${st.username}は離席中のため、自動で${req.type === 'carryJoin' ? '見送り' : '降り'}ました`, 'fold'); return pass; }
     return new Promise(resolve => {
       const ms = req.short ? this.M.opt.graceMs : this.M.opt.turnMs;
       const deadline = Date.now() + ms;
@@ -413,6 +429,7 @@ class Runtime {
     const i = this.seatOf(user.id);
     const p = this.shortPend.get(i) || this.pending; need(p, '今はあなたの番ではありません');
     need(i === p.req.seat, '今はあなたの番ではありません');
+    if (a && a.rid != null && a.rid !== '') need(Number(a.rid) === p.req.rid, 'この操作は前の番のものです。画面を確かめてください');
     const t = p.req.type, act = a && a.act;
     if (t === 'oya') need(['bet', 'fold', 'show'].includes(act), '操作が正しくありません');
     else if (t === 'carryJoin') {
@@ -429,18 +446,26 @@ class Runtime {
       while (this.status === 'running') {
         this.beat = Date.now();
         if (this.stopReq) break;
-        const present = this.seats.filter((st, i) => st && !st.away && this.connected(i)).length;
-        if (present === 0) { await sleep(500); continue; }          // 全員が離席なら一時停止
+        if (this.idle && this.seats.filter((st, i) => st && this.T.players[i].pts >= this.s.ante + this.s.reserve).length >= 2) { this.idle = false; this.resumeFee(); }   // ゲームができそうになったら、参加費の確認を再開(休みの人が払えれば戻る)
+        const playable = this.seats.map((st, i) => st && this.canPlay(i) ? st : null).filter(Boolean), present = playable.filter(st => !st.away).length;
+        if (playable.length >= 2 && present < 2) {          // その場にいて遊べる人が2人未満なら一時停止(離席した人の参加料が、1人に流れ続けないように)
+          if (!this.paused) { this.paused = true; this.addLog('その場にいる人が2人未満のため、一時停止しています', 'info'); this.broadcast(); }
+          this.flushLeaves();
+          if (this.timeUp() && await this.endConditions(true)) break;
+          await sleep(500); continue;
+        }
+        if (this.paused) { this.paused = false; this.addLog('再開します', 'info'); this.resumeFee(); }
         this.inGame = true;
         const io = { log: (m, k) => { this.addLog(m, k); }, sync: () => this.broadcast(), beat: ms => sleep(ms * M.opt.beatScale), human: r => this.human(r), grace: this.s.startMode === 'free' };
         this.T.feeBp = M.opt.feeBp; this.T.jpBp = M.opt.jackpotBp; this.T.cfg.jpRank = M.opt.jpRank;   // 設定の変更を、次のゲームから反映
         const r = await Solo.playGame(this.T, io);
         this.inGame = false;
         if (r.type === 'nogame') {
+          this.flushLeaves(); this.idle = true;
           if (this.s.startMode === 'condition' || this.startedOnce) { if (await this.endConditions(true)) break; }
           await sleep(500 * Math.max(0.1, M.opt.beatScale)); continue;
         }
-        this.startedOnce = true;
+        this.startedOnce = true; this.idle = false;
         this.afterGame(r);
         if (await this.endConditions(false)) break;
         await sleep(5000 * M.opt.beatScale);   // 集める演出→1秒→山札が上がる演出の時間
@@ -469,11 +494,12 @@ class Runtime {
       showdown: (r.showdown || []).map(x => ({ name: nameOf(x.seat), uid: uidOf(x.seat), hand: x.hand, label: x.label }))
     };
     this.core.db.prepare('INSERT INTO games(table_id,no,ts,color,hash,commit_str,how,winner,result,data) VALUES(?,?,?,?,?,?,?,?,?,?)').run(this.id, g.no, Date.now(), g.color, g.commit.hash, g.commit.str, how, this.lastGame.winner, JSON.stringify(this.lastGame.deltas), JSON.stringify(dataRec));
+    if (this.core.onGame) { try { this.core.onGame(this.id, Object.assign({ winner: this.lastGame.winner }, dataRec)); } catch (e) { console.error('戦績の記録', e); } }   // 戦績(本人だけが見る)
     this._net = null;
     if (r.type === 'win' && how === 'show') this.trackFlow(r, g);
     this.M.save(this);
     // 退席予約・離席のあと始末
-    this.seats.forEach((st, i) => { if (st && st.leaveQueued && this.T.pot === 0) { st.leaveQueued = false; try { this.removeSeat(i, 'leave'); } catch (e) { console.error(e); } } });
+    this.flushLeaves();
     this.broadcast();
   }
   trackFlow(r, g) {   // 同じ相手にだけ負け続ける人を見つける(チップの受け渡しの疑い)
@@ -486,13 +512,15 @@ class Runtime {
       if (m.total >= 10 && m.total % 10 === 0) { const top = Math.max(...Object.values(m.to)); if (top / m.total >= 0.85) { this.core.suspect(a.userId, 'chip_dump', { to: b.userId, table: this.id }); this.core.suspect(b.userId, 'chip_dump', { from: a.userId, table: this.id }); } }
     }
   }
+  timeUp() { const s = this.s; return !!(s.durationMin && this.startedAt && Date.now() - this.startedAt >= s.durationMin * 60000); }
+  resumeFee() { try { this.feeTick(); } catch (e) { console.error('feeTick', e); } }
   async endConditions(nogame) {
     const s = this.s; let why = null;
     // 持ち越しの場があっても、次のゲームができない(出られる人が2人未満・または参加者が2人に満たず開始できなかった)なら待たずに終える。残った場は endTable が残っている人で分ける
     const clear = this.T.pot === 0 || nogame || this.seats.filter((st, i) => st && this.canPlay(i)).length < 2;
-    if (s.durationMin && this.startedAt && Date.now() - this.startedAt >= s.durationMin * 60000 && clear) { this.addLog('時間になったので、このゲームで終了します', 'info'); why = 'time'; }
+    if (this.timeUp() && clear) { this.addLog('時間になったので、このゲームで終了します', 'info'); why = 'time'; }
     else {
-      const out = this.seats.filter((st, i) => st && !this.canPlay(i)).length;
+      const out = this.seats.filter((st, i) => st && this.T.players[i].pts < s.ante + s.reserve).length;   // チップが足りない人だけを数える(参加費の休み・離席は数えない)
       if (s.endZero && out >= s.endZero && clear) { this.addLog(`${out}人がゲームに出られなくなったので終了します`, 'info'); why = 'zero'; }
       else if (nogame && s.startMode === 'condition') why = 'nogame';
       else if (this.stopReq && this.T.pot === 0) why = 'stopped';
@@ -560,7 +588,7 @@ class Tables {
     this.core = core; this.rt = new Map(); this.userTable = new Map();
     this.tableErrors = [];   // エラーで止まった時刻(健康診断で数える)
     this.opt = Object.assign({ turnMs: 40000, voteMs: 60000, graceMs: 5 * 60000, minStayMs: 15 * 60000, disconnectGraceMs: 8000, beatScale: 1, chatEnabled: true, ads: false,
-      minUnit: 100, feeBp: 100, jackpotBp: 200, jpRank: 10, jpLast: 1, shugiMin: 1, entryFee: true, feeTickMs: 30000, feeWarnMs: 5 * 60000, clock: () => Date.now() }, opt || {});
+      minUnit: 100, feeBp: 100, jackpotBp: 200, liveHands: true, jpRank: 10, jpLast: 1, shugiMin: 1, entryFee: true, feeTickMs: 30000, feeWarnMs: 5 * 60000, clock: () => Date.now() }, opt || {});
     core.onUserBanned = uid => this.evict(uid);
     core.tablesOpt = this.opt; core.loadConfig();
     if (this.opt.feeTickMs > 0) { this.timer = setInterval(() => { for (const rt of this.rt.values()) { try { rt.feeTick(); } catch (e) { console.error('feeTick', e); } } }, this.opt.feeTickMs); if (this.timer.unref) this.timer.unref(); }
@@ -575,7 +603,7 @@ class Tables {
     need(actor.role === 'aj', '卓を作れるのはAJだけです', 403);
     const h = this.core.houseOf(actor.id);
     need(this.core.tableCount(h.id) < h.table_limit, `このハウスの卓の上限(${h.table_limit}卓)に達しています。上限を上げるには申請してください`);
-    const s = normSettings(raw, null, this.opt.minUnit, this.opt.shugiMin);
+    const s = normSettings(raw, null, this.opt.minUnit, this.opt.shugiMin); needEnd(s);
     const r = this.core.db.prepare('INSERT INTO tables_(house_id,name,settings,created_at) VALUES(?,?,?,?)').run(h.id, String(name || '卓').slice(0, 20), JSON.stringify(s), Date.now());
     this.core.D.audit(actor.id, 'table_create', Number(r.lastInsertRowid));
     return this.get(Number(r.lastInsertRowid)).summary();
@@ -597,7 +625,7 @@ class Tables {
     need(actor.role === 'aj' && h && h.id === rt.houseId, 'このハウスのAJだけが変更できます', 403);
     need(rt.count() === 0 && rt.status === 'open', '着席している人がいる間は、設定を変更できません');
     need(rt.T.jp.pool === 0 && rt.T.pot === 0, 'ジャックポットの払い出しが終わるまで、参加料・ベット額・アップ額の設定は変えられません');
-    rt.s = normSettings(raw, rt.s, this.opt.minUnit, this.opt.shugiMin); if (name) rt.name = String(name).slice(0, 20);
+    const ns = normSettings(raw, rt.s, this.opt.minUnit, this.opt.shugiMin); needEnd(ns); rt.s = ns; if (name) rt.name = String(name).slice(0, 20);
     this.core.db.prepare('UPDATE tables_ SET settings=?,name=? WHERE id=?').run(JSON.stringify(rt.s), rt.name, rt.id);
     rt.seats = Array.from({ length: rt.s.seats }, () => null); rt.buildEngine(); return this.summary(rt);
   }
@@ -606,6 +634,7 @@ class Tables {
     need((actor.role === 'aj' && h && h.id === rt.houseId) || actor.role === 'creator' || actor.role === 'sovereign', 'このハウスのAJだけが止められます', 403);
     rt.stop(); return { stopping: true };
   }
+  activeCount() { let n = 0; for (const rt of this.rt.values()) if (rt.status === 'running') n++; return n; }   // いま動いている卓の数
   stopAll() {   // システム更新のため、動いている卓をすべて止める(今のゲームのあとに終了し、チップはポケットへ戻る)
     let n = 0; for (const r of this.core.db.prepare("SELECT id FROM tables_ WHERE status IN ('open','running')").all()) { const rt = this.get(r.id); if (rt.status === 'running' || rt.count() > 0) { rt.stop(); n++; } } return n;
   }
@@ -613,15 +642,16 @@ class Tables {
     const id = this.userTable.get(uid); if (!id) return;
     const rt = this.rt.get(id); if (!rt) return;
     const i = rt.seatOf(uid); if (i < 0) return;
-    if (rt.inHand(i)) { rt.autoFoldPending(i); rt.seats[i].away = true; rt.seats[i].leaveQueued = true; }
+    if (rt.mustWait(i)) { rt.autoFoldPending(i); rt.seats[i].away = true; rt.seats[i].leaveQueued = true; rt.seats[i].evicted = true; rt.broadcast(); }
     else rt.removeSeat(i, 'evict');
   }
   // 起動時の復旧: 中断された卓のチップを、直前のゲーム終了時点のまま、持ち主のポケットに戻す
   recover() {
-    const core = this.core, L = core.L; let n = 0;
+    const core = this.core, L = core.L; let n = 0; this.lastRecover = { tables: 0, chips: 0 };
     for (const t of core.db.prepare("SELECT id FROM tables_ WHERE status IN ('open','running')").all()) {
       const stacks = core.db.prepare("SELECT acct,balance FROM accounts WHERE acct LIKE ? AND balance>0").all('s:' + t.id + ':%');
       const potA = L.balance('p:' + t.id);
+      { const held = stacks.reduce((a, x) => a + x.balance, 0) + potA + L.balance('j:' + t.id); if (held > 0) { this.lastRecover.tables++; this.lastRecover.chips += held; } }   // ゲームの途中で止まった卓(チップが卓に残っていた)
       const jb = L.balance('j:' + t.id);   // 積立: 保存してある積み上げ分に応じてポケットへ(記録がなければ卓の保管へ)
       if (jb > 0) {
         let ent = {}; try { ent = (JSON.parse(core.db.prepare('SELECT state FROM tables_ WHERE id=?').get(t.id).state || '{}').jp) || {}; } catch (e) {}

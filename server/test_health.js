@@ -38,6 +38,11 @@ let n = 0; const ok = m => { n++; console.log('  OK  ' + m); };
   app.mon.lastBackupError = null; app.mon.backupSameDisk = true; assert.ok(app.health(t2 + 60000).warn.includes('backupSameDisk')); app.mon.backupSameDisk = false;
   app.mon.uncaught = 1; assert.ok(app.health(t2 + 80000).alarm.includes('uncaught')); app.mon.uncaught = 0;
   ok('バックアップが2時間なければ注意・6時間なければ警報。同じディスクなら注意。想定外のエラーは警報');
+  app.mon.payErrors.push(t2 + 99000); assert.ok(app.health(t2 + 100000).warn.includes('payment'));
+  app.mon.payErrors.push(t2 + 99000, t2 + 99000); assert.ok(app.health(t2 + 120000).alarm.includes('payment')); app.mon.payErrors.length = 0;
+  const fk = { status: 'running', loopOn: false }; app.tables.rt.set(99998, fk); const hh = app.health(t2 + 121000); assert.strictEqual(hh.activeTables, 1); assert.strictEqual(hh.maintenance, false); app.tables.rt.delete(99998);
+  assert.strictEqual(app.health(t2 + 122000).activeTables, 0, '数は毎回数え直す(15秒の控えを使わない)');
+  ok('支払いの知らせ(Stripe)の受け取りが1時間に1回失敗で注意・3回で警報。動いている卓の数を毎回数えて返す(公開の前の確かめ用)');
   // IP: 中継(Fly.io)が書いた値だけを信じる。利用者が先頭に書いたにせのIPでは回数制限をすり抜けられない
   let last = 0;
   for (let i = 0; i < 21; i++) { const x = await fetch(base + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': `10.0.0.${i}, 203.0.113.7` }, body: JSON.stringify({ username: 'nobody', password: 'wrongwrong', deviceId: 'device-aaaaaaaa' }) }); last = x.status; }

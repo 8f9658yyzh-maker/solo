@@ -1,0 +1,20 @@
+# SOLO の見張り役の設定(Cloudflare Workers)。wrangler.toml という名前で保存して使う
+name = "solo-watch"
+main = "worker.mjs"
+compatibility_date = "2026-10-01"
+
+[triggers]
+crons = ["*/5 * * * *"]   # 5分ごと(無料プランで使える定期実行は、アカウント全体で5つまで)
+
+[vars]
+HEALTH_URL = "https://solo-club.jp/api/health"
+LINE_TO = ""              # 空なら友だち全員へ。自分だけに送るなら U から始まるユーザーID
+FAILS = "2"               # 何回続けて問題があったら知らせるか
+
+[[kv_namespaces]]
+binding = "KV"
+id = "ここに wrangler kv namespace create SOLO_WATCH で出た id を入れる"
+
+# 秘密の値は、ここには書かずに次のコマンドで入れる:
+#   npx wrangler secret put LINE_TOKEN
+#   npx wrangler secret put TEST_KEY

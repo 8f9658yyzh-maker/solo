@@ -50,9 +50,11 @@ function open(file) {
   CREATE TABLE IF NOT EXISTS peek_tickets(user_id INTEGER PRIMARY KEY, n INTEGER NOT NULL DEFAULT 0 CHECK(n>=0));
   CREATE TABLE IF NOT EXISTS peek_log(id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, delta INTEGER NOT NULL, kind TEXT NOT NULL, ref TEXT, ts INTEGER NOT NULL);
   CREATE TABLE IF NOT EXISTS passes(user_id INTEGER PRIMARY KEY, day TEXT NOT NULL, n INTEGER NOT NULL DEFAULT 0, paid_until INTEGER NOT NULL DEFAULT 0, warned_for INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL DEFAULT 0);
+  CREATE TABLE IF NOT EXISTS pw_resets(code TEXT PRIMARY KEY, user_id INTEGER NOT NULL, created_by INTEGER NOT NULL, created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL, used_at INTEGER);
   CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, actor_id INTEGER, action TEXT NOT NULL, target TEXT, detail TEXT);
   `);
   try { db.exec('ALTER TABLE games ADD COLUMN data TEXT'); } catch (e) { /* すでにある */ }
+  try { db.exec('ALTER TABLE change_requests ADD COLUMN images TEXT'); } catch (e) { /* すでにある */ }   // 変更の要望に付ける写真(JSONの配列)
   const getMeta = (k, d) => { const r = db.prepare('SELECT v FROM meta WHERE k=?').get(k); return r ? r.v : d; };
   const setMeta = (k, v) => db.prepare('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v));
   let depth = 0;

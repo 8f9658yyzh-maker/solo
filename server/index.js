@@ -3,18 +3,29 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const D = require('./db'); const { Core, Err, need } = require('./core'); const { Tables, DEFAULTS } = require('./tables'); const { Billing } = require('./billing');
+const { Stats } = require('./stats'); const { Perks } = require('./perks'); const { Ads } = require('./ads'); const { ChipRequests } = require('./chipreq'); const { Legal } = require('./legal'); const { Notifier } = require('./notify');
 
 function createApp(opts) {
   opts = opts || {};
   const d = D.open(opts.dbFile || ':memory:'), core = new Core(d, opts.core), tables = new Tables(core, opts.tables);
   const billing = new Billing(d, core, opts.billing);   // 有料プラン(鍵がなければ申し込みボタンを出さない)
-  if (opts.recover !== false) { const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`); }
+  const perks = billing.perks = new Perks(d, core, billing);   // 有料の特典(テーマ・単品の購入)
+  const stats = new Stats(d, core, billing); core.onGame = (tid, rec) => stats.record(tid, rec);   // 戦績
+  const ads = new Ads(d, core, billing, opts.ads || opts.billing);   // 広告(地元スポンサー・広告会社)
+  const chipreq = new ChipRequests(d, core);   // チップの申請(AJ・管理責任者 → 上の立場)
+  const legal = new Legal(d, core, opts.legal || opts.billing);   // 利用規約などのページと同意
+  const notifier = opts.notifier || new Notifier({});   // かいとさんのスマホへの緊急の知らせ(設定がなければ何もしない)
+  if (opts.recover !== false) {
+    const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`);
+    const lr = tables.lastRecover || {}; if (lr.tables) notifier.send('【緊急】SOLO: 遊んでいる途中で本番が止まりました', `再起動しました。途中だった卓 ${lr.tables} 卓のチップ(合計 ${lr.chips})を、止まる直前の数のまま持ち主のポケットへ戻しました。遊んでいた人へのお知らせが必要です。`, { key: 'recover' });
+  }
   const webDir = path.join(__dirname, '..', 'web');
   const trustProxy = !!opts.trustProxy;
+  const setupCode = String(opts.setupCode || '').length >= 8 ? String(opts.setupCode) : '';   // 8文字未満の合言葉は使わない(当てられやすいため)
   const hits = new Map();
   const tickets = new Map();   // 卓の中継(SSE)用の短い引換券。本物のログイン用の鍵をURLに載せないため
   const limited = (key, max, ms) => { const now = Date.now(); const a = (hits.get(key) || []).filter(t => t > now - ms); a.push(now); hits.set(key, a); return a.length > max; };
-  const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
+  const MIME = { '.txt': 'text/plain; charset=utf-8', '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json' };
 
   // 中継の後ろでは、中継が書いた値だけを信じる。X-Forwarded-For の先頭は利用者が自由に書けるので使わない(使うとIPの締め出し・回数制限をすり抜けられる)
   const clientIp = req => {
@@ -25,17 +36,20 @@ function createApp(opts) {
     return req.socket.remoteAddress || '';
   };
   // ---- 健康診断(見張りプログラムが5分ごとに見る) ----
-  const mon = { errors500: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
+  const WHY = { ledger: 'チップの合計が合いません', errors500: 'サーバーのエラーが続いています', payment: '支払い(Stripe)の知らせを受け取れません。払った人がプランを使えないおそれ', tableErrors: '卓がエラーで止まりました', stalledTables: '動かなくなった卓があります', uncaught: '想定外のエラーが起きました', backup: 'バックアップが取れていません', disk: 'ディスクの空きが少なくなっています' };
+  const mon = { errors500: [], payErrors: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
   const recent = (arr, ms, now) => arr.filter(t => t > now - ms).length;
   let healthCache = null;
   function health(now = Date.now()) {
-    if (healthCache && healthCache.at > now - 15000) return healthCache.body;   // 15秒は同じ答え(何度も開かれても台帳の検査を繰り返さない)
+    const live = () => ({ activeTables: tables.activeCount(), seated: tables.userTable.size, maintenance: !!core.maintenance().on });   // 遊んでいる卓の数は毎回数え直す(公開の前の確かめに使うため)
+    if (healthCache && healthCache.at > now - 15000) return Object.assign({}, healthCache.body, live());   // 15秒は同じ答え(何度も開かれても台帳の検査を繰り返さない)
     const c = core.L.check(), alarm = [], warn = [];
     if (!c.ok) alarm.push('ledger');   // チップの合計が発行量と合わない・マイナスの口座がある
     const e500 = recent(mon.errors500, 600000, now); if (e500 >= 10) alarm.push('errors500'); else if (e500 > 0) warn.push('errors500');
     const te = recent(tables.tableErrors, 3600000, now); if (te >= 3) alarm.push('tableErrors'); else if (te > 0) warn.push('tableErrors');
     const stuck = tables.stalled(Math.max(tables.opt.graceMs, tables.opt.turnMs) + 120000, now); if (stuck) alarm.push('stalledTables');
     if (mon.uncaught) alarm.push('uncaught');
+    const pe = recent(mon.payErrors, 3600000, now); if (pe >= 3) alarm.push('payment'); else if (pe > 0) warn.push('payment');   // 支払いの知らせ(Stripe)の受け取りの失敗
     let backupAgeMin = null;
     if (mon.lastBackupOk != null) { backupAgeMin = Math.floor((now - mon.lastBackupOk) / 60000); if (backupAgeMin > 360) alarm.push('backup'); else if (backupAgeMin > 120) warn.push('backup'); }
     else if (mon.lastBackupError) alarm.push('backup');
@@ -43,11 +57,23 @@ function createApp(opts) {
     let diskFreePct = null;
     if (mon.dataDir) { try { const f = fs.statfsSync(mon.dataDir); diskFreePct = Math.floor(f.bavail / f.blocks * 100); if (diskFreePct < 10) alarm.push('disk'); else if (diskFreePct < 20) warn.push('disk'); } catch (e) {} }
     const body = { ok: true, ledger: c.ok, level: alarm.length ? 'alarm' : warn.length ? 'warn' : 'ok', alarm, warn,
-      errors500_10m: e500, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
-    healthCache = { at: now, body }; return body;
+      errors500_10m: e500, payErrors_1h: pe, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
+    healthCache = { at: now, body }; return Object.assign({}, body, live());   // 誰が座っているかは出さない(数だけ)
   }
-  const readBody = req => new Promise((res, rej) => {
-    let b = ''; req.on('data', c => { b += c; if (b.length > 100000) { rej(new Err('データが大きすぎます', 413)); req.destroy(); } });
+  // 1分ごとに健康診断を見て、警報が新しく出たら鳴る知らせ。続いていれば6時間ごとに念押し。消えたら「戻りました」
+  let alarmed = [];
+  async function alertTick(now = Date.now()) {
+    if (!notifier.on()) return null;
+    const h = health(now), cur = h.alarm || [];
+    for (const k of cur) await notifier.send('【緊急】SOLO: ' + (WHY[k] || k), `本番(${opts.publicUrl || 'solo-club'})で警報が出ています: ${cur.map(x => WHY[x] || x).join('・')}。Claudeに「本番の警報を見て」と伝えてください。`, { key: 'alarm:' + k, gapMs: 6 * 3600000 });
+    if (!cur.length && alarmed.length) await notifier.send('SOLO: 元に戻りました', `警報(${alarmed.map(x => WHY[x] || x).join('・')})が消えました。`, { urgent: false });
+    for (const k of alarmed) if (!cur.includes(k)) notifier.last.delete('alarm:' + k);   // 次に同じ警報が出たら、すぐ鳴らす
+    alarmed = cur.slice(); return cur;
+  }
+  const readBody = (req, max = 100000) => new Promise((res, rej) => {
+    // 上限を超えたら読むのをやめて「大きすぎます」と返す。すぐ切ると利用者には通信エラーに見えるので、上限の5倍までは読み捨ててから返す
+    let b = '', got = 0, over = false;
+    req.on('data', c => { got += c.length; if (over) { if (got > max * 5) req.destroy(); return; } b += c; if (b.length > max) { over = true; b = ''; rej(new Err('データが大きすぎます', 413)); } });
     req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch (e) { rej(new Err('JSONが正しくありません')); } });
   });
   const send = (res, code, obj) => { const s = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(s); };
@@ -61,13 +87,28 @@ function createApp(opts) {
     // Stripe からの知らせ: ログイン不要・システム更新中でも受け取る(取りこぼすと、払った人がプランを使えなくなるため)
     if (m === 'POST' && p === '/api/stripe/webhook') {
       const raw = await new Promise((ok, ng) => { let b = ''; req.setEncoding('utf8'); req.on('data', c => { b += c; if (b.length > 500000) { ng(new Err('データが大きすぎます', 413)); req.destroy(); } }); req.on('end', () => ok(b)); });
-      return send(res, 200, await billing.webhook(raw, req.headers['stripe-signature']));
+      try { return send(res, 200, await billing.webhook(raw, req.headers['stripe-signature'])); }
+      catch (e) { if (!/署名がありません/.test(e.message)) { mon.payErrors.push(Date.now()); if (mon.payErrors.length > 1000) mon.payErrors.shift(); console.error('★支払いの知らせ(Stripe)を受け取れません:', e.message); } throw e; }   // 署名つきなのに失敗=鍵の設定違いか処理の失敗。払った人がプランを使えなくなる
     }
-    let body = {}; if (m !== 'GET') body = await readBody(req);
+    // 写真を送る所(変更の要望・スポンサーの広告)だけ、大きめのデータを受け取る。ほかは 100KB まで
+    let body = {}; if (m !== 'GET') body = await readBody(req, p === '/api/requests' || p.startsWith('/api/admin/sponsors') ? 1500000 : 100000);
     // ---- 認証なし ----
     if (m === 'POST' && p === '/api/signup') { need(body.age18 === true, '18歳以上であることへの同意が必要です'); need(!limited('su' + ip, 10, 600000), '登録の試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.signupAsync(Object.assign({}, body, { ip }))); }
+    if (m === 'POST' && p === '/api/password/reset') { need(!limited('pr' + ip, 10, 600000), '試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.resetPasswordAsync(body)); }
     if (m === 'POST' && p === '/api/login') { need(!limited('li' + ip, 20, 600000), 'ログインの試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.loginAsync(Object.assign({}, body, { ip }))); }
     if (m === 'GET' && p === '/api/health') return send(res, 200, health());
+    // 最初の設定: 作成者がまだいないときだけ、合言葉(SETUP_CODE)を知っている人が作成者を作れる。パスワードをサーバーの設定やチャットに書かずに済む
+    if (p === '/api/setup') {
+      const done = !!d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get(), open = !!setupCode && !done;
+      if (m === 'GET') return send(res, 200, { needed: open, done, code: !!setupCode });   // 受け付けない理由が分かるように(作成者がいる / 合言葉がない・8文字未満)
+      need(open, done ? '最初の設定は、もう終わっています(作成者がいます)' : '合言葉が設定されていないか、8文字より短いため、最初の設定は使えません', 400);
+      need(!limited('setup' + ip, 5, 600000), '試行が多すぎます。10分ほど待ってください', 429);
+      const a = Buffer.from(String(body.code || '')), b = Buffer.from(setupCode);
+      need(a.length === b.length && require('node:crypto').timingSafeEqual(a, b), '合言葉が違います', 403);
+      const id = core.bootstrap(String(body.username || ''), String(body.password || ''), String(body.phone || ''));
+      d.audit(id, 'setup', id, { ip });
+      return send(res, 200, { ok: true });
+    }
     const u = core.auth(token); need(u, 'ログインしてください', 401);
     const isTop = u.role === 'creator' || u.role === 'sovereign';
     if (p !== '/api/me' && !(m === 'GET' && p.endsWith('/stream')) && limited('rq' + u.id, 600, 60000)) throw new Err('操作が速すぎます。少し待ってください', 429);
@@ -77,21 +118,39 @@ function createApp(opts) {
     if (m === 'POST' && p === '/api/logout') { core.logout(token); return send(res, 200, { ok: true }); }
     if (m === 'GET' && p === '/api/me') {
       const house = core.homeHouseId(u);
-      return send(res, 200, { user: core.pub(u), pocket: core.pocket(u.id), homeHouse: house, houses: core.myHouses(u), seatedAt: tables.seatedAt(u.id) || null, unread: core.notifications(u).filter(n => !n.read).length, peek: core.peekBalance(u.id), plan: billing.status(u), adFree: billing.active(u.id), supply: isTop ? core.L.supply() : undefined, defaults: DEFAULTS, chatEnabled: tables.opt.chatEnabled, ads: !!tables.opt.ads, maintenance: mt.on ? { msg: mt.msg || '', ts: mt.ts } : null, maintNotice: !mt.on && mt.at > Date.now() ? { at: mt.at, msg: mt.msg || '' } : null, rules: { minUnit: tables.opt.minUnit, feeBp: tables.opt.feeBp, jackpotBp: tables.opt.jackpotBp, jpRank: tables.opt.jpRank, shugiMin: tables.opt.shugiMin, entryFee: tables.opt.entryFee, entryFirst: core.cfg.ENTRY_FEE_FIRST, entryNext: core.cfg.ENTRY_FEE_NEXT }, pass: tables.opt.entryFee ? (() => { const n = tables.opt.clock(), r = core.passRow(u.id, n); return { exempt: isTop, until: r.paid_until > n ? r.paid_until : 0, next: core.entryFeeNow(u.id, n), count: r.n }; })() : null });
+      return send(res, 200, { user: core.pub(u), pocket: core.pocket(u.id), homeHouse: house, houses: core.myHouses(u), seatedAt: tables.seatedAt(u.id) || null, unread: core.notifications(u).filter(n => !n.read).length, peek: core.peekBalance(u.id), plan: billing.status(u), adFree: billing.active(u.id), perks: perks.status(u), ad: ads.config(u), terms: { need: legal.need(u), ver: legal.version() }, supply: isTop ? core.L.supply() : undefined, defaults: DEFAULTS, chatEnabled: tables.opt.chatEnabled, ads: !!tables.opt.ads, maintenance: mt.on ? { msg: mt.msg || '', ts: mt.ts } : null, maintNotice: !mt.on && mt.at > Date.now() ? { at: mt.at, msg: mt.msg || '' } : null, rules: { minUnit: tables.opt.minUnit, feeBp: tables.opt.feeBp, jackpotBp: tables.opt.jackpotBp, jpRank: tables.opt.jpRank, shugiMin: tables.opt.shugiMin, entryFee: tables.opt.entryFee, entryFirst: core.cfg.ENTRY_FEE_FIRST, entryNext: core.cfg.ENTRY_FEE_NEXT }, pass: tables.opt.entryFee ? (() => { const n = tables.opt.clock(), r = core.passRow(u.id, n); return { exempt: isTop, until: r.paid_until > n ? r.paid_until : 0, next: core.entryFeeNow(u.id, n), count: r.n }; })() : null });
     }
     // ---- 有料プラン ----
     if (m === 'GET' && p === '/api/plan') return send(res, 200, billing.status(u));
     if (m === 'POST' && p === '/api/plan/checkout') { need(!limited('co' + u.id, 5, 600000), '申し込みの操作が多すぎます。しばらく待ってください', 429); return send(res, 200, await billing.checkout(u)); }
     if (m === 'POST' && p === '/api/plan/portal') return send(res, 200, await billing.portal(u));
     if (m === 'GET' && p === '/api/admin/plans') return send(res, 200, billing.list(u));
+    // ---- 特典(戦績・テーマ・単品) ----
+    if (m === 'GET' && p === '/api/stats') return send(res, 200, stats.mine(u, q.get('days')));
+    if (m === 'POST' && p === '/api/prefs') return send(res, 200, perks.setTheme(u, String(body.theme || '')));
+    if (m === 'POST' && p === '/api/shop/buy') { need(!limited('co' + u.id, 5, 600000), '申し込みの操作が多すぎます。しばらく待ってください', 429); return send(res, 200, await billing.buy(u, body.item)); }
+    if (m === 'GET' && p === '/api/admin/sales') return send(res, 200, perks.sales(u));
+    if (m === 'POST' && p === '/api/terms/agree') return send(res, 200, legal.agree(u, String(body.ver || '')));
+    // ---- 広告 ----
+    if (m === 'GET' && p === '/api/ads/pick') return send(res, 200, ads.pick(u, q.get('slot')));
+    if (m === 'POST' && p === '/api/ads/click') { need(!limited('ac' + u.id, 30, 600000), '操作が多すぎます', 429); return send(res, 200, ads.click(u, body.id)); }
+    if (m === 'GET' && p === '/api/admin/sponsors') return send(res, 200, ads.list(u));
+    if (m === 'POST' && p === '/api/admin/sponsors') return send(res, 200, ads.create(u, body));
+    if ((mm = p.match(/^\/api\/admin\/sponsors\/(\d+)(\/image)?$/))) { if (m === 'PATCH' && !mm[2]) return send(res, 200, ads.update(u, Number(mm[1]), body)); if (m === 'GET' && mm[2]) return send(res, 200, ads.image(u, Number(mm[1]))); }
+    // ---- チップの申請 ----
+    if (m === 'GET' && p === '/api/chip-requests') return send(res, 200, chipreq.list(u));
+    if (m === 'POST' && p === '/api/chip-requests') { need(!limited('cr' + u.id, 10, 3600000), '申請が多すぎます。しばらく待ってください', 429); return send(res, 200, chipreq.create(u, body.amount, body.note)); }
+    if ((mm = p.match(/^\/api\/chip-requests\/(\d+)\/(approve|decline|cancel)$/)) && m === 'POST') return send(res, 200, mm[2] === 'cancel' ? chipreq.cancel(u, Number(mm[1])) : chipreq.decide(u, Number(mm[1]), mm[2] === 'approve', body.reply));
     if (m === 'POST' && p === '/api/invites') return send(res, 200, core.createInvite(u, body.role));
+    if (m === 'POST' && p === '/api/password-resets') { need(!limited('prc' + u.id, 20, 3600000), '操作が多すぎます', 429); return send(res, 200, core.createReset(u, body.userId)); }
     if (m === 'GET' && p === '/api/users') return send(res, 200, core.visibleUsers(u));
     if (m === 'POST' && p === '/api/maintenance') { const v = core.setMaintenance(u, body.on === true, body.msg, body.at); const stopped = v.on ? tables.stopAll() : 0; return send(res, 200, Object.assign({ stopped }, v)); }
     if (m === 'GET' && p === '/api/config') return send(res, 200, core.getConfig(u));
     if (m === 'POST' && p === '/api/config') return send(res, 200, core.setConfig(u, body.patch));
     if (m === 'GET' && p === '/api/requests') return send(res, 200, core.listRequests(u));
-    if (m === 'POST' && p === '/api/requests') return send(res, 200, { id: core.addRequest(u, body.body) });
+    if (m === 'POST' && p === '/api/requests') return send(res, 200, { id: core.addRequest(u, body.body, body.images) });
     { const rm = p.match(/^\/api\/requests\/(\d+)$/); if (m === 'POST' && rm) { core.setRequestStatus(u, Number(rm[1]), body.status); return send(res, 200, { ok: true }); } }
+    { const rm = p.match(/^\/api\/requests\/(\d+)\/images$/); if (m === 'GET' && rm) return send(res, 200, core.requestImages(u, Number(rm[1]))); }
     if (m === 'GET' && p === '/api/fees') return send(res, 200, core.feeOverview(u));
     { const fm = p.match(/^\/api\/fees\/(\d+)\/receive$/); if (m === 'POST' && fm) return send(res, 200, core.feeReceive(u, Number(fm[1]))); }
     if (m === 'GET' && p === '/api/ledger') return send(res, 200, core.myLedger(u, 100));
@@ -135,7 +194,7 @@ function createApp(opts) {
       if (m === 'GET' && act === 'games') { need(rt.seatOf(u.id) >= 0 || isTop || tables.participated(id, u.id), '権限がありません', 403); return send(res, 200, tables.games(id)); }
       if (m === 'GET' && act === 'gamedata') return send(res, 200, tables.gameData(id, u));
       if (m === 'POST' && act === 'ticket') { for (const [k, t] of tickets) if (t.exp < Date.now()) tickets.delete(k); const k = D.rand(16); tickets.set(k, { token, tableId: id, exp: Date.now() + 120000 }); return send(res, 200, { ticket: k }); }
-      if (m === 'POST' && act === 'join') return send(res, 200, await rt.join(u, body.buyIn));
+      if (m === 'POST' && act === 'join') return send(res, 200, await rt.join(u, body.buyIn));   // 規約が変わっても、遊ぶのを止めない(変更はお知らせで伝える)
       if (m === 'POST' && act === 'leave') return send(res, 200, rt.leave(u));
       if (m === 'POST' && act === 'act') { rt.act(u, body); return send(res, 200, { ok: true }); }
       if (m === 'POST' && act === 'away') { rt.setAway(u, !!body.away); return send(res, 200, { ok: true }); }
@@ -163,17 +222,32 @@ function createApp(opts) {
     throw new Err('見つかりません', 404);
   }
 
+  // 画面の安全の決まり(CSP)。広告会社を使うときだけ、Google の広告の読み込み先を足す
+  const NET = 'https://pagead2.googlesyndication.com https://*.googlesyndication.com https://*.doubleclick.net https://*.google.com https://*.gstatic.com https://*.adtrafficquality.google https://*.googleadservices.com';
+  const csp = () => ads.net()
+    ? `default-src 'self'; media-src 'self' blob: data:; script-src 'self' ${NET}; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data: https:; connect-src 'self' ${NET}; frame-src ${NET}; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`
+    : "default-src 'self'; media-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+  const headers = type => ({ 'Content-Type': type, 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': ads.net() ? 'strict-origin-when-cross-origin' : 'no-referrer', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': csp() });
   function serveStatic(req, res, url) {
     let p = decodeURIComponent(url.pathname);
+    if (p === '/ads.txt') { const t = ads.adsTxt(); res.writeHead(t ? 200 : 404, headers(MIME['.txt'])); return res.end(t || ''); }
+    { const lm = p.match(/^\/legal\/([a-z]+)(?:\.html)?$/); if (lm) {   // 規約などのページ(運営者・販売者の情報を差し込む)
+      return fs.readFile(path.join(webDir, 'legal', lm[1] + '.html'), 'utf8', (err, tpl) => {
+        if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
+        let out; try { out = legal.render(lm[1], tpl); } catch (e) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
+        res.writeHead(200, headers(MIME['.html'])); res.end(out);
+      });
+    } }
     if (p === '/engine.js') p = null;
     const file = p === null ? path.join(__dirname, '..', 'engine.js') : path.join(webDir, p === '/' ? 'index.html' : p);
     if (p !== null && !path.resolve(file).startsWith(path.resolve(webDir))) { res.writeHead(403); return res.end(); }
     fs.readFile(file, (err, buf) => {
       if (err) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); return res.end('見つかりません'); }
-      res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer', 'X-Frame-Options': 'DENY', 'Content-Security-Policy': "default-src 'self'; media-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'" });
+      res.writeHead(200, headers(MIME[path.extname(file)] || 'application/octet-stream'));
       res.end(buf);
     });
   }
+
   const handler = async (req, res) => {
     const url = new URL(req.url, 'http://x');
     try {
@@ -194,19 +268,23 @@ function createApp(opts) {
     return d.db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now).changes;
   };
   const ttimer = setInterval(() => { try { tidy(); } catch (e) { console.error('tidy', e); } }, 600000); if (ttimer.unref) ttimer.unref();
-  return { server, core, tables, d, handler, maintTick, billing, health, mon, tidy, hits };
+  return { server, core, tables, d, notifier, alertTick, handler, maintTick, billing, health, mon, tidy, hits, perks, stats, ads, chipreq, legal };
 }
 
 if (require.main === module) {
   const file = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'solo.db');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
+  const notifier = new Notifier(process.env);
+  const app = createApp({ notifier, publicUrl: process.env.PUBLIC_URL, dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', setupCode: process.env.SETUP_CODE, tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
   if (!app.billing.ready()) console.log('有料プラン: 鍵(STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PUBLIC_URL)が未設定なので、申し込みボタンは出ません');
   else console.log('有料プラン: ' + (app.billing.testMode() ? 'テストモード(本物のお金は動きません)' : '★本番モード(本物のお金が動きます)'));
+  console.log('広告: ' + (app.ads.client ? '地元スポンサー + Google AdSense(設定の「広告会社」を1にすると出ます)' : '地元スポンサーだけ(ADSENSE_CLIENT が未設定)'));
+  { const miss = ['LEGAL_OPERATOR', 'LEGAL_CONTACT'].concat(app.billing.ready() ? ['SELLER_NAME', 'SELLER_ADDRESS', 'SELLER_PHONE'] : []).filter(k => !process.env[k]); if (miss.length) console.log('注意: 規約などのページに【未記入】があります: ' + miss.join(', ')); }
   if (!app.d.db.prepare("SELECT 1 FROM users WHERE role='creator'").get()) {
     const u = process.env.CREATOR_USER, pw = process.env.CREATOR_PASS, ph = process.env.CREATOR_PHONE;
     if (u && pw) { app.core.bootstrap(u, pw, ph); console.log('作成者アカウントを作成し、5億チップを発行しました'); }
-    else console.log('作成者がまだいません。CREATOR_USER / CREATOR_PASS / CREATOR_PHONE を指定して起動してください');
+    else if (process.env.SETUP_CODE) console.log('作成者がまだいません。画面の「最初の設定」から、合言葉(SETUP_CODE)を使って作ってください');
+    else console.log('作成者がまだいません。SETUP_CODE(画面から作る)か、CREATOR_USER / CREATOR_PASS / CREATOR_PHONE を指定して起動してください');
   }
   // バックアップ: 起動時と1時間ごと(検査つき)。BACKUP_DIR は本番では別ボリューム/別の場所を推奨
   const bdir = process.env.BACKUP_DIR || path.join(path.dirname(file), 'backups');
@@ -219,6 +297,27 @@ if (require.main === module) {
   // 想定外の失敗で、全部の卓を巻き込んで落ちないようにする。記録して健康診断を「警報」にし、人が判断する
   process.on('uncaughtException', e => { app.mon.uncaught++; console.error('★想定外のエラー', e); });
   process.on('unhandledRejection', e => { app.mon.uncaught++; console.error('★想定外のエラー(約束の失敗)', e); });
+  // 止める合図(公開・再起動)を受けたら: 新しいゲームを始めず、今のゲームの決着を待って卓を閉じ、チップをポケットへ戻してから終わる
+  let closing = false;
+  const shutdown = sig => {
+    if (closing) return; closing = true;
+    const busy = () => app.tables.activeCount();
+    console.log(`★${sig}: 止める合図を受けました。動いている卓 ${busy()} 卓を、今のゲームの後に閉じます`);
+    for (const rt of app.tables.rt.values()) if (rt.status === 'running') { rt.addLog('システム更新のため、このゲームの後に卓を閉じます。チップはポケットに戻ります', 'info'); rt.broadcast(); }
+    if (busy()) app.notifier.send('【緊急】SOLO: 遊んでいる卓があるのに本番を止めています', `動いている卓 ${busy()} 卓を、今のゲームの後に閉じます。チップはポケットに戻ります。遊んでいる人へのお知らせが必要です。`, { key: 'shutdown' });
+    app.tables.stopAll();
+    const t0 = Date.now(), limit = Number(process.env.SHUTDOWN_WAIT_MS || 100000);
+    const iv = setInterval(() => {
+      if (busy() && Date.now() - t0 < limit) return;
+      clearInterval(iv);
+      if (busy()) console.log(`★${Math.round(limit / 1000)}秒待っても終わらない卓が ${busy()} 卓あります。次の起動で、直前の状態のままポケットへ戻します`);
+      try { app.server.close(); } catch (e) {} try { app.d.db.close(); } catch (e) {}
+      process.exit(0);
+    }, 300);
+  };
+  setInterval(() => { app.alertTick().catch(e => console.error('警報の知らせ', e)); }, 60000).unref();   // 1分ごとに警報を見て、出たらスマホを鳴らす
+  console.log('緊急の知らせ: ' + (notifier.on() ? [notifier.ntfy && 'ntfy', notifier.po && 'Pushover'].filter(Boolean).join(' + ') : '送り先が未設定(NTFY_TOPIC か PUSHOVER_TOKEN/PUSHOVER_USER)'));
+  process.on('SIGTERM', () => shutdown('SIGTERM')); process.on('SIGINT', () => shutdown('SIGINT'));
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, () => console.log('ソロ: http://localhost:' + port));
 }

@@ -305,6 +305,8 @@ async function playGame(T, io, opts) {
     }));
     shorts.forEach((s, k) => { if (outs[k]) parts.push(s); else shortOut.push(s); });
   }
+  // 返事を待っている間に、席を立った・チップを動かした・休みになった人は外す(払えない人から取らない)
+  for (let k = parts.length - 1; k >= 0; k--) { const s = parts[k]; if (P(s).vacant || P(s).sitout || avail(s) < (carrying ? needOf(s) : cfg.ante)) { parts.splice(k, 1); if (!P(s).vacant) shortOut.push(s); } }
   parts.sort((a, b) => a - b);
   if (parts.length < 2) return { type: 'nogame', parts };
 
