@@ -168,7 +168,6 @@ async function renderHome() {
   clearTimers();
   try { await loadMe(); } catch (x) { return toast(x.message, true); }
   if (S.me.maintenance && !['creator', 'sovereign'].includes(S.me.user.role)) return maintView();
-  if (S.me.terms && S.me.terms.need && !(await termsGate())) return;
   if (S.me.seatedAt && !S.skipResume) { go('#/table/' + S.me.seatedAt); return; }
   ({ home: homeTab, wallet: walletTab, admin: adminTab, notice: noticeTab })[S.tab] ? await ({ home: homeTab, wallet: walletTab, admin: adminTab, notice: noticeTab })[S.tab]() : homeTab();
 }

@@ -148,7 +148,7 @@ const total = T => T.players.reduce((a, p) => a + p.pts, 0) + T.pot + T.jp.pool 
         const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: 'bet', amount: r.minBet } : { act: 'fold' }; try { rt.act(c.user(uid), a); } catch (e) {} }); } } } }; rt.subscribe(c.user(uid), b.res); b.stop = () => rt.unsubscribe(c.user(uid), b.res); return b; };
       const bots = W.ps.slice(0, 3).map(mkFold); W.T.opt.beatScale = 0.05;
       const nm = u => c.user(u).username; let ok0 = false;
-      for (let k = 0; k < 6000 && !ok0; k++) { await sleep(10); ok0 = rt.peekOpen(); }
+      for (let k = 0; k < 6000 && !ok0; k++) { await sleep(10); ok0 = rt.peekOpen() && rt.T.g.parts.length === 3; }   // 3人がそろって始まったゲーム(最初のゲームは2人で始まることがある)
       if (!ok0) console.log('DBG', rt.status, rt.lastGame && { no: rt.lastGame.no, how: rt.lastGame.how, w: rt.lastGame.winner, h: rt.lastGame.hands }, rt.T.g && { no: rt.T.g.no, ph: rt.T.g.phase });
       assert.ok(ok0, '全員降りのゲームが終わった直後の状態になる');
       const win = rt.lastGame.winner, V = [W.ps[0], W.ps[1]].find(u => nm(u) !== win), other = W.ps.slice(0, 3).find(u => u !== V);

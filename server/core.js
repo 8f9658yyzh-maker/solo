@@ -409,6 +409,7 @@ class Core {
       { key: 'graceMin', label: 'チップ不足の猶予', unit: '分', min: 1, max: 60, note: '流れた次の試合で足りない人に渡す時間' },
       { key: 'nuisanceLimit', label: '迷惑行為で自動退会になる回数', unit: '回', min: 1, max: 10, note: '' },
       { key: 'noticeStep', label: '受け取りの通知を出す額', unit: 'チップ', min: 1000, max: 10000000, note: '保管がこの額を超えるたびに通知' },
+      { key: 'liveHands', label: '作成者・統括の観戦で、ゲーム中の手札を見る', unit: '1=見る / 0=ゲームの後だけ', min: 0, max: 1, note: '他の会社に貸す・売るときは0を推奨(運営側の人が手札を知りながら誰かに教える疑いを持たれないため)。ゲームの後のデータでは、どちらでも全員の手札を確認できます' },
       { key: 'chat', label: '卓のメッセージ機能', unit: '1=使える / 0=使えない', min: 0, max: 1, note: '' },
       { key: 'billing', label: '有料プランの申し込み', unit: '1=受け付ける / 0=受け付けない', min: 0, max: 1, note: '0にしても、すでに入っている人のプランは止まりません(解約はStripeの画面から)' },
       { key: 'pricePlayer', label: '一般プランの月額', unit: '円', min: 100, max: 10000, note: '変えた後に申し込む人から新しい金額。すでに入っている人の金額は変わりません' },
@@ -422,14 +423,14 @@ class Core {
   }
   configValue(key) {
     const o = this.tablesOpt || {}, c = this.cfg;
-    return ({ feeBp: o.feeBp, jackpotBp: o.jackpotBp, jpRank: o.jpRank, jpLast: o.jpLast ? 1 : 0, shugiMin: o.shugiMin, turnSec: Math.round((o.turnMs || 40000) / 1000), voteSec: Math.round((o.voteMs || 60000) / 1000), minStayMin: Math.round((o.minStayMs == null ? 900000 : o.minStayMs) / 60000), disconnectSec: Math.round((o.disconnectGraceMs || 8000) / 1000), entryFee: o.entryFee ? 1 : 0, entryFirst: c.ENTRY_FEE_FIRST, entryNext: c.ENTRY_FEE_NEXT, minUnit: o.minUnit, graceMin: Math.round((o.graceMs || 300000) / 60000), nuisanceLimit: c.NUISANCE_LIMIT, noticeStep: c.FEE_NOTICE_STEP, chat: o.chatEnabled ? 1 : 0, ads: o.ads ? 1 : 0, billing: c.BILLING ? 1 : 0, pricePlayer: c.PRICE_PLAYER, priceAj: c.PRICE_AJ, priceTheme: c.PRICE_THEME, planPeek: c.PLAN_PEEK, adNet: c.AD_NET ? 1 : 0, adGapMin: c.AD_GAP_MIN })[key];
+    return ({ feeBp: o.feeBp, jackpotBp: o.jackpotBp, jpRank: o.jpRank, jpLast: o.jpLast ? 1 : 0, shugiMin: o.shugiMin, turnSec: Math.round((o.turnMs || 40000) / 1000), voteSec: Math.round((o.voteMs || 60000) / 1000), minStayMin: Math.round((o.minStayMs == null ? 900000 : o.minStayMs) / 60000), disconnectSec: Math.round((o.disconnectGraceMs || 8000) / 1000), entryFee: o.entryFee ? 1 : 0, entryFirst: c.ENTRY_FEE_FIRST, entryNext: c.ENTRY_FEE_NEXT, minUnit: o.minUnit, graceMin: Math.round((o.graceMs || 300000) / 60000), nuisanceLimit: c.NUISANCE_LIMIT, noticeStep: c.FEE_NOTICE_STEP, chat: o.chatEnabled ? 1 : 0, liveHands: o.liveHands === false ? 0 : 1, ads: o.ads ? 1 : 0, billing: c.BILLING ? 1 : 0, pricePlayer: c.PRICE_PLAYER, priceAj: c.PRICE_AJ, priceTheme: c.PRICE_THEME, planPeek: c.PLAN_PEEK, adNet: c.AD_NET ? 1 : 0, adGapMin: c.AD_GAP_MIN })[key];
   }
   applyConfig(patch) {
     const o = this.tablesOpt, c = this.cfg;
     if ('jackpotBp' in patch) o.jackpotBp = patch.jackpotBp; if ('jpRank' in patch) o.jpRank = patch.jpRank; if ('jpLast' in patch) o.jpLast = !!patch.jpLast; if ('shugiMin' in patch) o.shugiMin = patch.shugiMin;
     if ('turnSec' in patch) o.turnMs = patch.turnSec * 1000; if ('voteSec' in patch) o.voteMs = patch.voteSec * 1000; if ('minStayMin' in patch) o.minStayMs = patch.minStayMin * 60000; if ('disconnectSec' in patch) o.disconnectGraceMs = patch.disconnectSec * 1000;
     if ('feeBp' in patch) o.feeBp = patch.feeBp; if ('entryFee' in patch) o.entryFee = !!patch.entryFee; if ('entryFirst' in patch) c.ENTRY_FEE_FIRST = patch.entryFirst; if ('entryNext' in patch) c.ENTRY_FEE_NEXT = patch.entryNext;
-    if ('minUnit' in patch) o.minUnit = patch.minUnit; if ('graceMin' in patch) o.graceMs = patch.graceMin * 60000; if ('nuisanceLimit' in patch) c.NUISANCE_LIMIT = patch.nuisanceLimit; if ('noticeStep' in patch) c.FEE_NOTICE_STEP = patch.noticeStep; if ('chat' in patch) o.chatEnabled = !!patch.chat; if ('ads' in patch) o.ads = !!patch.ads;
+    if ('minUnit' in patch) o.minUnit = patch.minUnit; if ('graceMin' in patch) o.graceMs = patch.graceMin * 60000; if ('nuisanceLimit' in patch) c.NUISANCE_LIMIT = patch.nuisanceLimit; if ('noticeStep' in patch) c.FEE_NOTICE_STEP = patch.noticeStep; if ('chat' in patch) o.chatEnabled = !!patch.chat; if ('liveHands' in patch) o.liveHands = !!patch.liveHands; if ('ads' in patch) o.ads = !!patch.ads;
     if ('billing' in patch) c.BILLING = patch.billing ? 1 : 0; if ('pricePlayer' in patch) c.PRICE_PLAYER = patch.pricePlayer; if ('priceAj' in patch) c.PRICE_AJ = patch.priceAj;
     if ('priceTheme' in patch) c.PRICE_THEME = patch.priceTheme; if ('planPeek' in patch) c.PLAN_PEEK = patch.planPeek; if ('adNet' in patch) c.AD_NET = patch.adNet ? 1 : 0; if ('adGapMin' in patch) c.AD_GAP_MIN = patch.adGapMin;
   }
@@ -437,7 +438,7 @@ class Core {
   getConfig(actor) {
     need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403);
     const lg = this.db.prepare("SELECT v FROM meta WHERE k='config_log'").get();
-    const G = { feeBp: '手数料とジャックポット', jackpotBp: '手数料とジャックポット', jpRank: '手数料とジャックポット', jpLast: '手数料とジャックポット', shugiMin: '祝儀', entryFee: '参加費', entryFirst: '参加費', entryNext: '参加費', noticeStep: '参加費', turnSec: '卓の進行', voteSec: '卓の進行', graceMin: '卓の進行', minStayMin: '卓の進行', disconnectSec: '卓の進行', minUnit: '卓の作り方', nuisanceLimit: 'その他', chat: 'その他', ads: '広告', adNet: '広告', adGapMin: '広告', billing: '有料プラン', priceTheme: '有料プラン', planPeek: '有料プラン', pricePlayer: '有料プラン', priceAj: '有料プラン' };
+    const G = { feeBp: '手数料とジャックポット', jackpotBp: '手数料とジャックポット', jpRank: '手数料とジャックポット', jpLast: '手数料とジャックポット', shugiMin: '祝儀', entryFee: '参加費', entryFirst: '参加費', entryNext: '参加費', noticeStep: '参加費', turnSec: '卓の進行', voteSec: '卓の進行', graceMin: '卓の進行', minStayMin: '卓の進行', disconnectSec: '卓の進行', minUnit: '卓の作り方', nuisanceLimit: 'その他', chat: 'その他', liveHands: 'その他', ads: '広告', adNet: '広告', adGapMin: '広告', billing: '有料プラン', priceTheme: '有料プラン', planPeek: '有料プラン', pricePlayer: '有料プラン', priceAj: '有料プラン' };
     const ORDER = ['手数料とジャックポット', '祝儀', '参加費', '卓の進行', '卓の作り方', '有料プラン', '広告', 'その他'];
     const items = this.configDefs().map(d => Object.assign({}, d, { group: G[d.key] || 'その他', value: this.configValue(d.key) })).sort((a, b) => ORDER.indexOf(a.group) - ORDER.indexOf(b.group));
     return { items, log: lg ? JSON.parse(lg.v) : [], maintenance: this.maintenance().on };

@@ -140,7 +140,7 @@ const inv = W => W.c.L.check();
     const sc = W.d.db.prepare("SELECT COUNT(*) AS c FROM suspicion WHERE kind='same_table_device'").get().c; assert.ok(sc >= 2); ok('同じ端末のアカウントが同じ卓に座ると、疑いとして記録');
     // 退会 → 卓から外れチップが戻る
     const pb = W.c.pocket(W.ps[1]);
-    W.c.expel(W.c.user(W.cid), W.ps[1], 'テスト'); assert.strictEqual(rt.seatOf(W.ps[1]), -1); assert.ok(inv(W).ok, JSON.stringify(inv(W))); ok('退会させると卓から外れ、チップは回収され、5億の合計は一致');
+    W.c.expel(W.c.user(W.cid), W.ps[1], 'テスト'); for (let k = 0; k < 600 && rt.seatOf(W.ps[1]) >= 0; k++) await sleep(20); assert.strictEqual(rt.seatOf(W.ps[1]), -1);   // ゲーム中なら、そのゲームの後に外れる assert.ok(inv(W).ok, JSON.stringify(inv(W))); ok('退会させると卓から外れ、チップは回収され、5億の合計は一致');
   }
   // ===== 再起動の復旧 =====
   {

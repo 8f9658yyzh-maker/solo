@@ -321,7 +321,7 @@ function peekHTML(v) {
   return `<div style="min-width:200px;padding:6px 10px;border-radius:2px;border:1px solid rgba(201,162,75,.6);background:rgba(5,13,24,.86)"><div style="font-size:11px;color:#C9A24B;letter-spacing:.1em;margin-bottom:2px">手札確認 ・ 券${k.count}（★は勝者）</div>${k.targets.map(row).join('')}</div>`;
 }
 A.tPeek = async v => { try { await TB.src.post('peek', { target: v }); } catch (x) { toast(x.message, true); } };
-const doAct = async a => { TB.ui.mode = null; if (TB.v) { TB.v.req = null; tableRender(); } await run(() => TB.src.act(a)); };
+const doAct = async a => { TB.ui.mode = null; const rid = TB.v && TB.v.req ? TB.v.req.rid : null; if (rid != null) a = Object.assign({ rid }, a); if (TB.v) { TB.v.req = null; tableRender(); } await run(() => TB.src.act(a)); };   // rid=どの番への操作か(古い画面・二重送信を防ぐ)
 A.tFold = () => doAct({ act: 'fold' });
 A.tJoin = () => doAct({ act: 'join' });
 A.tSkip = () => doAct({ act: 'skip' });

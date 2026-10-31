@@ -4,7 +4,7 @@
 // 入っていない値は「【未記入】」と目に見える形で出す(空欄のまま公開しないため)。
 const { need } = require('./core');
 
-const TERMS_VERSION = '2026-10-29';   // 利用規約・プライバシーポリシーを変えたら、日付を変える(全員にもう一度同意してもらう)
+const TERMS_VERSION = '2026-10-31';   // 利用規約の版(登録したときの版を記録する。変えても遊ぶのは止めず、お知らせで伝える)
 const PAGES = ['terms', 'privacy', 'external', 'tokushoho', 'sponsor'];
 const BLANK = '<span class="blank">【未記入】</span>';
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));

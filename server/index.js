@@ -176,7 +176,7 @@ function createApp(opts) {
       if (m === 'GET' && act === 'games') { need(rt.seatOf(u.id) >= 0 || isTop || tables.participated(id, u.id), '権限がありません', 403); return send(res, 200, tables.games(id)); }
       if (m === 'GET' && act === 'gamedata') return send(res, 200, tables.gameData(id, u));
       if (m === 'POST' && act === 'ticket') { for (const [k, t] of tickets) if (t.exp < Date.now()) tickets.delete(k); const k = D.rand(16); tickets.set(k, { token, tableId: id, exp: Date.now() + 120000 }); return send(res, 200, { ticket: k }); }
-      if (m === 'POST' && act === 'join') { need(!legal.need(u), '新しい利用規約への同意が必要です。ホームの画面で確認してください', 403); return send(res, 200, await rt.join(u, body.buyIn)); }
+      if (m === 'POST' && act === 'join') return send(res, 200, await rt.join(u, body.buyIn));   // 規約が変わっても、遊ぶのを止めない(変更はお知らせで伝える)
       if (m === 'POST' && act === 'leave') return send(res, 200, rt.leave(u));
       if (m === 'POST' && act === 'act') { rt.act(u, body); return send(res, 200, { ok: true }); }
       if (m === 'POST' && act === 'away') { rt.setAway(u, !!body.away); return send(res, 200, { ok: true }); }

@@ -38,7 +38,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   const sign = (raw, t) => { t = t || Math.floor(now / 1000); return 't=' + t + ',v1=' + crypto.createHmac('sha256', WH).update(t + '.' + raw).digest('hex'); };
   const hook = ev => { const raw = JSON.stringify(ev); return call('POST', '/api/stripe/webhook', raw, null, { 'Stripe-Signature': sign(raw) }); };
 
-  // 1. 規約: 登録した人は同意済み。版が変わると卓に座れず、同意すると座れる
+  // 1. 規約: 登録した人は同意済み。版が変わっても卓には座れる(同意し直しは任意)
   let r = await call('GET', '/api/me', null, pt); assert.strictEqual(r.j.terms.need, false); assert.ok(r.j.terms.ver);
   app.d.db.prepare("UPDATE users SET terms_ver='old' WHERE id=?").run(pid);
   r = await call('GET', '/api/me', null, pt); assert.strictEqual(r.j.terms.need, true);
@@ -49,7 +49,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   r = await call('GET', '/legal/tokushoho', null); assert.strictEqual(r.s, 200); assert.ok(r.t.includes('【未記入】'), '販売者の情報が無いときは、目に見える形で未記入と出す'); assert.ok(r.t.includes('680円'));
   for (const pg of ['privacy', 'external', 'sponsor']) { r = await call('GET', '/legal/' + pg, null); assert.strictEqual(r.s, 200, pg); }
   r = await call('GET', '/legal/../index', null); assert.notStrictEqual(r.s, 200);
-  ok('利用規約: 登録時に同意を記録。版が変わったら同意し直すまで卓に座れない。規約・プライバシー・外部送信・特商法・広告主募集のページを出し、空欄は【未記入】');
+  ok('利用規約: 登録時に同意を記録。版が変わっても遊ぶのは止めない(同意し直しは任意)。規約・プライバシー・外部送信・特商法・広告主募集のページを出し、空欄は【未記入】');
 
   // 2. 戦績: 本物の卓で2人がゲームをすると、1人1ゲームごとに記録され、本人だけが見られる
   const give = (to, amt) => call('POST', '/api/give', { to, amount: amt }, at);
