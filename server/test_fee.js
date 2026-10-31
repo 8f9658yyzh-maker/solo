@@ -25,7 +25,7 @@ function bot(W, rt, uid) {
   const b = { last: null, notes: [] };
   b.res = { write: s => { if (!s.startsWith('data: ')) return; const v = JSON.parse(s.slice(6)); b.last = v;
     if (v.req && !b.busy) { b.busy = true; setImmediate(() => { b.busy = false; if (!rt.pending || rt.pending.req.seat !== v.req.seat) return; const r = v.req;
-      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: Math.random() < 0.5 ? 'bet' : 'fold', amount: r.cap } : r.type === 'biki' ? { act: 'follow', up: 0 } : { act: Math.random() < 0.5 ? 'follow' : 'fold' };
+      const a = r.type === 'carryJoin' ? { act: 'skip' } : r.type === 'oya' ? { act: Math.random() < 0.5 ? 'bet' : 'fold', amount: r.minBet } : r.type === 'biki' ? { act: 'follow', up: 0 } : { act: Math.random() < 0.5 ? 'follow' : 'fold' };
       try { rt.act(W.c.user(uid), a); } catch (e) {} }); } } };
   rt.subscribe(W.c.user(uid), b.res); b.stop = () => rt.unsubscribe(W.c.user(uid), b.res); return b;
 }
@@ -79,8 +79,13 @@ const notes = (W, uid, kind) => W.c.db.prepare('SELECT * FROM notifications WHER
     for (let i = 0; i < 3; i++) assert.strictEqual(c.pocket(W.ps[i]), 20000 - 5000 - 1000);
     assert.strictEqual(c.L.balance('f:' + rt.id), 3000);
     ok('開始時にポケットから1,000チップずつ引かれ、卓の保管へ入った(卓のチップは引かれない)');
-    await sleep(2500);
+    // ロボットは最小額で賭ける(最大額だと乱数しだいで2人のチップが尽き、5〜6ゲームで止まることがあった)。決まった時間ではなく8ゲーム進むまで待つ
+    for (let i = 0; i < 150 && rt.T.gameNo < 8; i++) await sleep(100);
     assert.ok(rt.T.gameNo >= 8, 'ゲームが進む ' + rt.T.gameNo);
+    // ここから先は時刻を進めて参加費を確かめるので、全員の接続を切って卓を一時停止させてから進める(ゲームの最中はチップを移せないため)
+    bots.forEach(b => b.stop());
+    for (let i = 0; i < 150 && rt.gameActive(); i++) await sleep(50);
+    assert.ok(!rt.gameActive(), '全員の接続が切れたら、今のゲームのあとで一時停止する');
     const rows = c.db.prepare('SELECT data FROM games WHERE table_id=?').all(rt.id).map(r => JSON.parse(r.data));
     let rake = 0, wins = 0;
     for (const d of rows) { if (d.how === 'nagashi') { assert.strictEqual(d.fee, 0); continue; } wins++; const gross = d.potWon + d.fee + d.cut + (d.jp ? d.jp.paid * 0 : 0); assert.strictEqual(d.fee, Math.ceil(gross * 100 / 10000)); assert.strictEqual(d.cut, Math.ceil(gross * 200 / 10000)); assert.ok(d.fee >= 1); rake += d.fee; }
