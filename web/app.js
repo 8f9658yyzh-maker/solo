@@ -45,6 +45,25 @@ function dlg(o) {
   });
 }
 const askText = (msg, def, numeric) => dlg({ msg, input: true, def, numeric, buttons: [{ label: 'OK', value: true, cls: 'gold' }] });
+// 写真を軽くする: 横 maxW px までに縮め、JPEG で maxLen 文字(約 maxLen×0.75 バイト)以下にする。サーバーの上限に収めるため
+function shrinkImage(file, maxW, maxLen) {
+  return new Promise((ok, ng) => {
+    const rd = new FileReader();
+    rd.onerror = () => ng(new Error('写真を読めませんでした'));
+    rd.onload = () => { const im = new Image(); im.onerror = () => ng(new Error('写真を読めませんでした')); im.onload = () => {
+      let q = 0.85, w = Math.min(maxW, im.width), out;
+      do { const c = document.createElement('canvas'); c.width = w; c.height = Math.round(im.height * w / im.width); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); out = c.toDataURL('image/jpeg', q); q -= 0.15; if (q < 0.4) { w = Math.round(w * 0.75); q = 0.8; } } while (out.length > maxLen && w > 120);
+      ok(out);
+    }; im.src = rd.result; };
+    rd.readAsDataURL(file);
+  });
+}
+// 写真を大きく見る(押すと閉じる)
+function photoView(images) {
+  const ov = document.createElement('div'); ov.className = 'dlg'; ov.style.overflowY = 'auto'; ov.style.alignItems = 'flex-start'; ov.style.background = 'rgba(0,0,0,.92)';
+  ov.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;max-width:720px;width:100%;margin:auto">${images.map(src => `<img src="${e(src)}" alt="" style="width:100%;border-radius:4px">`).join('')}<button class="btn block">閉じる</button></div>`;
+  ov.addEventListener('click', () => ov.remove()); document.body.appendChild(ov);
+}
 const askYes = (msg, label) => dlg({ msg, buttons: [{ label: label || 'はい', value: true, cls: 'gold' }] }).then(v => v === true);
 
 /* ---------- ログイン・登録 ---------- */
@@ -378,10 +397,23 @@ async function requestsCard() {
   return `<div class="card"><h3>REQUESTS<small>変更の要望(ここをこうしたい)</small></h3>
   <p class="mute" style="margin-top:0">新しい機能の追加や、なくしたい機能、仕組みの変更は、ここに書いて控えておけます。仕組み自体の変更は、アプリの中では書き換えられないので、この控えをもとに開発側(Claude)が作ります。状態を「未・対応中・済・なし」で管理できます。</p>
   <textarea id="rq_body" rows="3" maxlength="1000" placeholder="例: 卓の画面に〇〇を追加したい / △△の機能はなくしたい"></textarea>
+  <label for="rq_img">写真<small>(3枚まで。画面の写真もそのまま選べます。自動で軽くします)</small></label><input id="rq_img" type="file" accept="image/*" multiple>
+  <div id="rq_prev" class="row" style="flex-wrap:wrap;margin-top:6px"></div>
   <button class="btn gold block" style="margin-top:8px" data-a="rqAdd">控える</button>
-  ${rows.map(r => `<div class="msgline"><span class="mute">#${r.id} ${new Date(r.ts).toLocaleDateString('ja-JP')} ${e(r.username)}</span> <span class="pill ${r.status === '済' ? 'gold' : ''}">${e(r.status)}</span><br>${e(r.body)}<div class="row" style="margin-top:6px">${['未', '対応中', '済', 'なし'].map(st => `<button class="btn sm" data-a="rqSet" data-v="${r.id}|${st}">${st}</button>`).join('')}</div></div>`).join('')}</div>`;
+  ${rows.map(r => `<div class="msgline"><span class="mute">#${r.id} ${new Date(r.ts).toLocaleDateString('ja-JP')} ${e(r.username)}</span> <span class="pill ${r.status === '済' ? 'gold' : ''}">${e(r.status)}</span><br>${e(r.body)}${r.nimg ? `<br><button class="btn sm" style="margin-top:6px" data-a="rqImgs" data-v="${r.id}">📷 写真${r.nimg}枚を見る</button>` : ''}<div class="row" style="margin-top:6px">${['未', '対応中', '済', 'なし'].map(st => `<button class="btn sm" data-a="rqSet" data-v="${r.id}|${st}">${st}</button>`).join('')}</div></div>`).join('')}</div>`;
 }
-A.rqAdd = async () => { const b = val('rq_body').trim(); if (!b) return toast('内容を入力してください', true); if (await run(() => api('POST', '/api/requests', { body: b }), '控えました')) adminTab(); };
+A.rqAdd = async () => {
+  const b = val('rq_body').trim(), images = S.data.rqImgs || [];
+  if (!b && !images.length) return toast('内容を入力するか、写真を付けてください', true);
+  if (await run(() => api('POST', '/api/requests', { body: b, images }), '控えました')) { S.data.rqImgs = []; adminTab(); }
+};
+A.rqImgs = async v => { const r = await run(() => api('GET', '/api/requests/' + v + '/images')); if (r && r.images.length) photoView(r.images); };
+document.addEventListener('change', async ev => {
+  if (ev.target.id !== 'rq_img') return;
+  const files = [...ev.target.files].slice(0, 3); if (ev.target.files.length > 3) toast('写真は3枚までです。最初の3枚を使います', true);
+  try { S.data.rqImgs = await Promise.all(files.map(f => shrinkImage(f, 1280, 380000))); } catch (x) { S.data.rqImgs = []; return toast(x.message, true); }
+  $('#rq_prev').innerHTML = S.data.rqImgs.map(src => `<img src="${src}" alt="" style="width:72px;height:72px;object-fit:cover;border-radius:3px;border:1px solid #2A4262">`).join('');
+});
 A.rqSet = async v => { const [id, st] = v.split('|'); if (await run(() => api('POST', '/api/requests/' + id, { status: st }))) adminTab(); };
 async function feesCard() {
   let rows = []; try { rows = await api('GET', '/api/fees'); } catch (x) { return ''; }

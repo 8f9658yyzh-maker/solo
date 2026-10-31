@@ -437,8 +437,17 @@ class Core {
     this.applyConfig(clean); return { changes };
   }
   // 「ここをこう変えたい」という要望の控え(作成者・統括責任者)
-  listRequests(actor) { need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403); return this.db.prepare('SELECT r.id,r.body,r.status,r.ts,u.username FROM change_requests r JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 200').all(); }
-  addRequest(actor, body) { need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403); body = String(body || '').trim().slice(0, 1000); need(body, '内容を入力してください'); return Number(this.db.prepare('INSERT INTO change_requests(user_id,body,ts) VALUES(?,?,?)').run(actor.id, body, Date.now()).lastInsertRowid); }
+  listRequests(actor) { need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403); return this.db.prepare('SELECT r.id,r.body,r.status,r.ts,u.username,COALESCE(json_array_length(r.images),0) AS nimg FROM change_requests r JOIN users u ON u.id=r.user_id ORDER BY r.id DESC LIMIT 200').all(); }
+  // 写真は3枚まで。画面で小さくした JPEG などの data URL(1枚 約300KBまで)。SVG は中に命令を書けるので受け付けない
+  addRequest(actor, body, images) {
+    need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403);
+    body = String(body || '').trim().slice(0, 1000); images = Array.isArray(images) ? images : [];
+    need(images.length <= 3, '写真は3枚までです');
+    need(images.every(s => typeof s === 'string' && s.length <= 400000 && /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(s)), '写真は PNG・JPEG・WebP で、1枚 約300KBまでにしてください');
+    need(body || images.length, '内容を入力するか、写真を付けてください');
+    return Number(this.db.prepare('INSERT INTO change_requests(user_id,body,images,ts) VALUES(?,?,?,?)').run(actor.id, body, images.length ? JSON.stringify(images) : null, Date.now()).lastInsertRowid);
+  }
+  requestImages(actor, id) { need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403); const r = this.db.prepare('SELECT images FROM change_requests WHERE id=?').get(Number(id)); need(r, '見つかりません', 404); return { images: r.images ? JSON.parse(r.images) : [] }; }
   setRequestStatus(actor, id, status) { need(actor.role === 'creator' || actor.role === 'sovereign', '権限がありません', 403); need(['未', '対応中', '済', 'なし'].includes(status), '状態が正しくありません'); this.db.prepare('UPDATE change_requests SET status=? WHERE id=?').run(status, Number(id)); }
 
   // ---------- システム更新中(メンテナンス) ----------

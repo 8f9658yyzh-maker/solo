@@ -108,16 +108,10 @@ A.spEdit = v => {
     <button class="btn gold block" style="margin-top:10px" data-a="spSave" data-v="${v || ''}">保存する</button></div>`;
   $('#spform').scrollIntoView({ behavior: 'smooth' });
 };
-// 画像を選んだら、横640px までに縮めて JPEG にする(サーバーの上限 約200KB に収めるため)
-document.addEventListener('change', ev => {
+// 画像を選んだら、横640px までに縮めて JPEG にする(サーバーの上限 約300KB に収めるため)
+document.addEventListener('change', async ev => {
   if (ev.target.id !== 'sp_img' || !ev.target.files[0]) return;
-  const f = ev.target.files[0], rd = new FileReader();
-  rd.onload = () => { const im = new Image(); im.onload = () => {
-    let q = 0.85, w = Math.min(640, im.width), out;
-    do { const c = document.createElement('canvas'); c.width = w; c.height = Math.round(im.height * w / im.width); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); out = c.toDataURL('image/jpeg', q); q -= 0.15; if (q < 0.4) { w = Math.round(w * 0.75); q = 0.8; } } while (out.length > 280000 && w > 120);
-    S.data.spImg = out; toast('画像を用意しました(' + Math.round(out.length / 1024) + 'KB)');
-  }; im.onerror = () => toast('画像を読めませんでした', true); im.src = rd.result; };
-  rd.readAsDataURL(f);
+  try { S.data.spImg = await shrinkImage(ev.target.files[0], 640, 280000); toast('画像を用意しました(' + Math.round(S.data.spImg.length / 1024) + 'KB)'); } catch (x) { toast(x.message, true); }
 });
 A.spSave = async v => {
   const b = { name: val('sp_name'), text: val('sp_text'), url: val('sp_url').trim(), slot: val('sp_slot'), weight: num('sp_w'), start_at: dnum(val('sp_start')), end_at: dnum(val('sp_end'), true), color: val('sp_color').trim(), note: val('sp_note') };

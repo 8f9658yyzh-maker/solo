@@ -178,6 +178,20 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
   assert.strictEqual(app.core.L.check().ok, true);
   ok('チップの申請: AJ・管理責任者だけ。宛先の人だけが承認でき、承認で台帳どおりに配られる。足りない時は配らない。取り消しもできる');
 
+  // 9. 写真: 変更の要望に3枚まで付けられ、あとで見られる。大きめの写真(約200KB)も届く。SVG・4枚目は断る
+  const big = 'data:image/jpeg;base64,' + crypto.randomBytes(200000).toString('base64');
+  r = await call('POST', '/api/requests', { body: '卓の画面をこうしたい', images: [big, big, big] }, kt); assert.strictEqual(r.s, 200, JSON.stringify(r.j)); const rq = r.j.id;
+  r = await call('POST', '/api/requests', { body: 'x', images: [big, big, big, big] }, kt); assert.strictEqual(r.s, 400);
+  r = await call('POST', '/api/requests', { body: 'x', images: ['data:image/svg+xml;base64,AAAA'] }, kt); assert.strictEqual(r.s, 400);
+  r = await call('POST', '/api/requests', { images: [big] }, kt); assert.strictEqual(r.s, 200, '写真だけでも控えられる');
+  r = await call('POST', '/api/requests', { body: '' }, kt); assert.strictEqual(r.s, 400);
+  r = await call('GET', '/api/requests', null, kt); assert.strictEqual(r.j.find(x => x.id === rq).nimg, 3); assert.ok(!('images' in r.j[0]), '一覧には写真そのものは入れない(軽くするため)');
+  r = await call('GET', '/api/requests/' + rq + '/images', null, kt); assert.strictEqual(r.j.images.length, 3); assert.strictEqual(r.j.images[0], big);
+  r = await call('GET', '/api/requests/' + rq + '/images', null, pt); assert.strictEqual(r.s, 403);
+  r = await call('POST', '/api/give', { to: pid, amount: 1, note: 'x'.repeat(200000) }, at); assert.strictEqual(r.s, 413, 'ほかの所は今までどおり 100KB まで');
+  r = await call('POST', '/api/admin/sponsors', { name: '大きい画像の店', text: '本物の大きさの画像', image: big }, kt); assert.strictEqual(r.s, 200, 'スポンサーの画像も実際の大きさで届く');
+  ok('写真: 変更の要望に3枚まで(写真だけでも可)、作成者・統括だけが見られる。SVG・4枚目は断る。実際の大きさの写真もスポンサーの画像も届く');
+
   console.log(`特典・広告・申請・規約のテスト: ${n}項目すべて合格`);
   app.server.close(); fake.close(); process.exit(0);
 })().catch(e => { console.error('NG', e); process.exit(1); });

@@ -53,8 +53,10 @@ function createApp(opts) {
       errors500_10m: e500, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
     healthCache = { at: now, body }; return body;
   }
-  const readBody = req => new Promise((res, rej) => {
-    let b = ''; req.on('data', c => { b += c; if (b.length > 100000) { rej(new Err('データが大きすぎます', 413)); req.destroy(); } });
+  const readBody = (req, max = 100000) => new Promise((res, rej) => {
+    // 上限を超えたら読むのをやめて「大きすぎます」と返す。すぐ切ると利用者には通信エラーに見えるので、上限の5倍までは読み捨ててから返す
+    let b = '', got = 0, over = false;
+    req.on('data', c => { got += c.length; if (over) { if (got > max * 5) req.destroy(); return; } b += c; if (b.length > max) { over = true; b = ''; rej(new Err('データが大きすぎます', 413)); } });
     req.on('end', () => { try { res(b ? JSON.parse(b) : {}); } catch (e) { rej(new Err('JSONが正しくありません')); } });
   });
   const send = (res, code, obj) => { const s = JSON.stringify(obj); res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' }); res.end(s); };
@@ -70,7 +72,8 @@ function createApp(opts) {
       const raw = await new Promise((ok, ng) => { let b = ''; req.setEncoding('utf8'); req.on('data', c => { b += c; if (b.length > 500000) { ng(new Err('データが大きすぎます', 413)); req.destroy(); } }); req.on('end', () => ok(b)); });
       return send(res, 200, await billing.webhook(raw, req.headers['stripe-signature']));
     }
-    let body = {}; if (m !== 'GET') body = await readBody(req);
+    // 写真を送る所(変更の要望・スポンサーの広告)だけ、大きめのデータを受け取る。ほかは 100KB まで
+    let body = {}; if (m !== 'GET') body = await readBody(req, p === '/api/requests' || p.startsWith('/api/admin/sponsors') ? 1500000 : 100000);
     // ---- 認証なし ----
     if (m === 'POST' && p === '/api/signup') { need(body.age18 === true, '18歳以上であることへの同意が必要です'); need(!limited('su' + ip, 10, 600000), '登録の試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.signupAsync(Object.assign({}, body, { ip }))); }
     if (m === 'POST' && p === '/api/login') { need(!limited('li' + ip, 20, 600000), 'ログインの試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.loginAsync(Object.assign({}, body, { ip }))); }
@@ -125,8 +128,9 @@ function createApp(opts) {
     if (m === 'GET' && p === '/api/config') return send(res, 200, core.getConfig(u));
     if (m === 'POST' && p === '/api/config') return send(res, 200, core.setConfig(u, body.patch));
     if (m === 'GET' && p === '/api/requests') return send(res, 200, core.listRequests(u));
-    if (m === 'POST' && p === '/api/requests') return send(res, 200, { id: core.addRequest(u, body.body) });
+    if (m === 'POST' && p === '/api/requests') return send(res, 200, { id: core.addRequest(u, body.body, body.images) });
     { const rm = p.match(/^\/api\/requests\/(\d+)$/); if (m === 'POST' && rm) { core.setRequestStatus(u, Number(rm[1]), body.status); return send(res, 200, { ok: true }); } }
+    { const rm = p.match(/^\/api\/requests\/(\d+)\/images$/); if (m === 'GET' && rm) return send(res, 200, core.requestImages(u, Number(rm[1]))); }
     if (m === 'GET' && p === '/api/fees') return send(res, 200, core.feeOverview(u));
     { const fm = p.match(/^\/api\/fees\/(\d+)\/receive$/); if (m === 'POST' && fm) return send(res, 200, core.feeReceive(u, Number(fm[1]))); }
     if (m === 'GET' && p === '/api/ledger') return send(res, 200, core.myLedger(u, 100));

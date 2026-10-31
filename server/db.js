@@ -53,6 +53,7 @@ function open(file) {
   CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, actor_id INTEGER, action TEXT NOT NULL, target TEXT, detail TEXT);
   `);
   try { db.exec('ALTER TABLE games ADD COLUMN data TEXT'); } catch (e) { /* すでにある */ }
+  try { db.exec('ALTER TABLE change_requests ADD COLUMN images TEXT'); } catch (e) { /* すでにある */ }   // 変更の要望に付ける写真(JSONの配列)
   const getMeta = (k, d) => { const r = db.prepare('SELECT v FROM meta WHERE k=?').get(k); return r ? r.v : d; };
   const setMeta = (k, v) => db.prepare('INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v').run(k, String(v));
   let depth = 0;
