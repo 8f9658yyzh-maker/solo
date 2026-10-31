@@ -45,7 +45,9 @@ const back2 = () => `<div style="width:26px;height:38px;border-radius:3px;${BACK
 
 function stageScale() {
   const st = $('.stage'); if (!st) return;
-  const sc = Math.min(window.innerWidth / 390, window.innerHeight / 844);
+  const wr = $('.stagewrap'), cs = wr ? getComputedStyle(wr) : null;   // 時計や電池の帯・下のバーの分をのぞいた高さに合わせる
+  const h = window.innerHeight - (cs ? parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) : 0);
+  const sc = Math.min(window.innerWidth / 390, h / 844);
   st.style.transform = `scale(${sc})`; st.style.marginLeft = Math.max(0, (window.innerWidth - 390 * sc) / 2) + 'px';
 }
 window.addEventListener('resize', () => { stageScale(); if (typeof fxAlign === 'function') fxAlign(); });
@@ -363,7 +365,7 @@ function practiceSetup() {
   <div class="grid2"><div><label>人数<small>(自分を含む)</small></label><select id="pr_n">${[3, 4, 5, 6, 7, 8].map(n => `<option ${n === PR.cfg.seats ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
   <div><label>アップ</label><select id="pr_up"><option value="1" ${PR.cfg.up ? 'selected' : ''}>あり</option><option value="0" ${PR.cfg.up ? '' : 'selected'}>なし</option></select></div></div>
   <div class="grid2"><div><label>参加料<small>(100以上)</small></label><input id="pr_a" type="number" value="${PR.cfg.ante}"></div><div><label>ベット上限</label><input id="pr_l" type="number" value="${PR.cfg.limit}"></div></div>
-  <button class="btn gold block" style="margin-top:14px" data-a="prStart">START <small>はじめる</small></button></div>${(S.me && RANK[S.me.user.role] <= 4) || window.__demoToken ? '<div class="card"><h3>SCENE<small>演出の確認</small></h3><div class="note">10ソロなどの場面を、数字や文字を入れて、動く画面で確かめられます(管理側だけに表示)。</div><button class="btn block" data-a="scOpen">演出の確認画面へ <small>SCENE</small></button></div>' : ''}</div>`;
+  <button class="btn gold block" style="margin-top:14px" data-a="prStart">START <small>はじめる</small></button></div>${(S.me && RANK[S.me.user.role] <= 4) || window.__demoToken ? '<div class="card"><h3>SCENE<small>演出の確認</small></h3><div class="note">10ソロなどの場面を、数字や文字を入れて、動く画面で確かめられます(管理側だけに表示)。</div><button class="btn block" data-a="scOpen">演出の確認画面へ <small>SCENE</small></button></div>' : ''}</div>${S.me ? tabBar('practice') : ''}`;
 }
 A.prStart = () => { PR.cfg = { seats: num('pr_n'), up: val('pr_up') === '1', ante: Math.max(100, num('pr_a') || 100), limit: Math.max(100, num('pr_l') || 1000) }; practiceRun(); };
 function practiceView() {

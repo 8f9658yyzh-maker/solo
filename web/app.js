@@ -147,11 +147,16 @@ function tabsFor(me) {
   t.push(['notice', 'NOTICE', '通知']);
   return t;
 }
-function frame(inner) {
+// 下のタブ(ホーム・練習・ポケット・管理・通知)。練習の設定画面でも出す
+function tabBar(cur) {
   const m = S.me, tabs = tabsFor(m.user);
+  return `<div class="tabs"><div class="tabs-in">${tabs.map(t => `<button class="${cur === t[0] ? 'on' : ''}" data-a="tab" data-v="${t[0]}">${t[1]}<small>${t[2]}</small>${t[0] === 'notice' && m.unread ? '<i class="dot"></i>' : ''}</button>`).join('')}</div></div>`;
+}
+function frame(inner) {
+  const m = S.me;
   $('#app').innerHTML = `<div class="page"><div class="top"><div class="brand">SOLO<small>${e(m.user.username)} ・ ${ROLE_JA[m.user.role]}</small></div>
     <span><button class="btn sm" data-a="bgmSheet" aria-label="BGMの曲">♫</button> <button class="btn sm" data-a="sfxToggle" aria-label="音">${typeof SFX !== 'undefined' && SFX.on ? (SFX.ctx && SFX.ctx.state === 'running' ? '♪ ON' : '♪ タップで有効') : '♪ OFF'}</button> <button class="btn sm" data-a="logout">LOG OUT<small style="display:none"></small></button></span></div>${noticeBanner()}${inner}${adBanner(S.tab)}${legalLinks()}</div>
-    <div class="tabs"><div class="tabs-in">${tabs.map(t => `<button class="${S.tab === t[0] ? 'on' : ''}" data-a="tab" data-v="${t[0]}">${t[1]}<small>${t[2]}</small>${t[0] === 'notice' && m.unread ? '<i class="dot"></i>' : ''}</button>`).join('')}</div></div>`;
+    ${tabBar(S.tab)}`;
   if (typeof adFill === 'function') adFill();
 }
 const legalLinks = () => `<p class="legal"><a href="/legal/terms" target="_blank" rel="noopener">利用規約</a><a href="/legal/privacy" target="_blank" rel="noopener">プライバシー</a><a href="/legal/external" target="_blank" rel="noopener">外部送信</a><a href="/legal/tokushoho" target="_blank" rel="noopener">特定商取引法の表記</a></p>`;
@@ -294,7 +299,7 @@ async function walletTab() {
   S.tab = 'wallet';
   const rows = await api('GET', '/api/ledger');
   const KIND = { give: '受け取り/配布', pull: '引き取り', buyin: '卓に持ち込み', cashout: '卓からポケットに戻す', chip_in: 'チップを追加', chip_out: 'チップをポケットに戻す', expel_return: '退会による返還', mint: '初期発行', supply_change: '総量の変更', game: 'ゲーム', recover: '復旧', recover_pot: '復旧', entry_fee: '参加費(1時間)', fee_receive: '手数料・参加費を受け取る' };
-  frame(`<div class="card"><div class="pocket"><div><div class="mute">POCKET ・ ポケット</div><div class="n">${fmt(S.me.pocket)}<span style="font-size:16px"> チップ</span></div></div>${S.me.pass && S.me.pass.exempt ? '<p class="mute">作成者と統括責任者のポケットは1つです(お二人で同じ残高)。参加費はかかりません。</p>' : ''}</div>
+  frame(`<div class="card"><div class="pocket"><div><div class="mute">POCKET ・ ポケット</div><div class="n">${fmt(S.me.pocket)}<span style="font-size:16px"> チップ</span></div></div></div>${S.me.pass && S.me.pass.exempt ? '<p class="mute" style="margin:8px 0 0">作成者と統括責任者のポケットは1つです(お二人で同じ残高)。参加費はかかりません。</p>' : ''}</div>
   ${await statsCard()}${planCard()}${themeCard()}${passCard()}
   <div class="card"><h3>HISTORY<small>履歴(あなたに関係するものだけ)</small></h3>
   ${rows.length ? `<table class="t"><tr><th>日時</th><th>内容</th><th class="r">増減</th></tr>${rows.map(r => `<tr><td class="mute">${new Date(r.ts).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}</td><td>${KIND[r.kind] || r.kind}${r.by ? ` <span class="mute">(${e(r.by)}が実行)</span>` : ''}<br><span class="mute">${e(r.counter)}${r.note ? ' ・ ' + e(r.note) : ''}</span></td><td class="r ${r.delta >= 0 ? 'tealc' : 'redc'}">${r.delta >= 0 ? '+' : ''}${fmt(r.delta)}</td></tr>`).join('')}</table>` : '<p class="mute">まだ履歴がありません。</p>'}</div>
