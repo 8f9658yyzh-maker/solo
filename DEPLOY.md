@@ -70,32 +70,22 @@ fly deploy
 3. 【あなた】ドメインの販売会社の画面で、その値を入れる
 4. 【Claude】`https://solo-club.jp` で開けることを確かめる
 
-## 3. 止まったときに LINE で知らせる(無料)
+## 3. 止まったときに LINE で知らせる(無料・5分ごと)
 
-1. 【あなた】LINE公式アカウントを作り(無料のコミュニケーションプラン: 月200通まで)、LINE Developers で Messaging API を有効にして「チャネルアクセストークン」を発行する。自分のLINEでそのアカウントを友だちに追加する
-2. 【あなた】Cloudflare に無料で登録する
-3. 【Claude】`monitor/` で次を実行(`wrangler.toml.example` を `wrangler.toml` に写して使う)
+1. 【あなた】LINE公式アカウントを作り(無料のコミュニケーションプラン: 月200通まで)、LINE Developers で Messaging API を有効にして「チャネルアクセストークン(長期)」を発行する。自分のLINEでそのアカウントを友だちに追加する
+2. 【あなた】Cloudflare に無料で登録し、Workers の画面を一度開いて workers.dev の名前を決める。「API トークン」→「Edit Cloudflare Workers」のひな形でトークンを作る。アカウントIDを控える
+3. 【あなた】GitHub → solo → Settings → Secrets and variables → Actions → New repository secret で、次の3つを入れる(チャットには貼らない)
+   - `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` / `LINE_TOKEN`
+4. 【Claude】Actions の「見張り役を置く」を動かす。置けたら LINE に「試しの知らせ」が届く
+5. 【あなた】届いたか教えてください
 
-```bash
-cd monitor && npx wrangler kv namespace create SOLO_WATCH
-```
+動き: 5分ごとに `/api/health` を見て、2回続けて問題(つながらない・警報)があれば「【緊急】」をつけて1回知らせる。直ったら「戻りました」を1回。止まったままなら6時間ごとに念押し。
+警報になるもの: チップの合計のずれ・サーバーエラーの連続・卓のエラー停止・固まった卓・想定外のエラー・バックアップの失敗・ディスクの空き・支払い(Stripe)の知らせの受け取り失敗。
+本番へ置く作業が失敗したとき・遊んでいる卓があって止めたときも、LINE に知らせる(LINE_TOKEN があれば)。
 
-```bash
-npx wrangler secret put LINE_TOKEN
-```
-
-```bash
-npx wrangler secret put TEST_KEY
-```
-
-```bash
-npx wrangler deploy
-```
-
-4. 【Claude】試しの知らせを送る: `curl -X POST -H "X-Watch-Key: 合言葉" https://solo-watch.〇〇.workers.dev/test`
-5. 【あなた】LINE に「試しの知らせ」が届いたか教えてください
-
-動き: 5分ごとに `/api/health` を見て、2回続けて問題(つながらない・警報)があれば1回知らせる。直ったら「戻りました」を1回。止まったままなら6時間ごとに念押し。
+### 本番へ置くときの決まり(仕組みで守っている)
+- 遊んでいる卓があると、置く作業は止まって失敗する。管理画面の「予告を出す」→ システム更新中になってから、Actions の「Run workflow」で置く(急ぐときは force に印)
+- 止める合図を受けたサーバーは、今のゲームの後に卓を閉じ、チップをポケットへ戻してから終わる(最大120秒)
 
 ## 4. 10人で試験運用(広告も課金もなし)
 

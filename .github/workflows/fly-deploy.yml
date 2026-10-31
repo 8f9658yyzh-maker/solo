@@ -89,3 +89,13 @@ jobs:
             sleep 10
           done
           echo "::error::置いたあと2分たっても健康診断が答えません"; exit 1
+      - name: 失敗・止めたときは LINE で知らせる(LINE_TOKEN が金庫にあるとき)
+        if: failure()
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          [ -n "$LINE_TOKEN" ] || { echo "LINE_TOKEN がないので、GitHub からの知らせ(メール)だけです"; exit 0; }
+          MSG="【緊急】SOLO を本番へ置けませんでした(遊んでいる卓があった・試験の失敗など)。理由: $RUN"
+          curl -s -X POST https://api.line.me/v2/bot/message/broadcast -H 'Content-Type: application/json' -H "Authorization: Bearer $LINE_TOKEN" \
+            -d "$(node -e 'console.log(JSON.stringify({messages:[{type:"text",text:process.argv[1]}]}))' "$MSG")"

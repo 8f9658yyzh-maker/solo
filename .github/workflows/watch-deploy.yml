@@ -1,0 +1,80 @@
+# SOLO の見張り役(5分ごとに本番を見て、問題があれば LINE で知らせる)を Cloudflare に置く。
+# 動くとき: monitor/ が変わったとき / GitHub の画面の「Run workflow」を押したとき
+# 必要な金庫の値(GitHub → Settings → Secrets and variables → Actions → New repository secret):
+#   CLOUDFLARE_API_TOKEN   Cloudflare の合鍵(「Edit Cloudflare Workers」のひな形で作る)
+#   CLOUDFLARE_ACCOUNT_ID  Cloudflare のアカウントID(Workers の画面の右側に出る)
+#   LINE_TOKEN             LINE公式アカウントの Messaging API のチャネルアクセストークン
+# 3つそろうまでは、何もせずに終わります。置けたら LINE に「試しの知らせ」が届きます。
+name: 見張り役を置く
+on:
+  workflow_dispatch:
+  push:
+    branches: [claude/vigilant-johnson-desok1]
+    paths: ['monitor/**', '.github/workflows/watch-deploy.yml']
+permissions:
+  contents: read
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+      APP: ${{ vars.FLY_APP || 'solo-club' }}
+      W: npx --yes wrangler@3.80.0
+    defaults:
+      run:
+        working-directory: monitor
+    steps:
+      - uses: actions/checkout@v4
+      - name: 金庫の値がそろっているか
+        id: key
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ] || [ -z "$LINE_TOKEN" ]; then
+            echo "::warning::CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID / LINE_TOKEN がそろっていないので、置かずに終わります"
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+          else echo "ok=1" >> "$GITHUB_OUTPUT"; fi
+      - uses: actions/setup-node@v4
+        if: steps.key.outputs.ok == '1'
+        with:
+          node-version: 22
+      - name: 見張り役の試験
+        if: steps.key.outputs.ok == '1'
+        run: node test_watch.js
+      - name: 状態を覚えておく場所(KV)を用意し、設定ファイルを作る
+        if: steps.key.outputs.ok == '1'
+        run: |
+          set -e
+          ID=$($W kv namespace list | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const a=JSON.parse(s.slice(s.indexOf("[")));const x=a.find(n=>/SOLO_WATCH/.test(n.title));console.log(x?x.id:"")})')
+          if [ -z "$ID" ]; then
+            OUT=$($W kv namespace create SOLO_WATCH); echo "$OUT"
+            ID=$(echo "$OUT" | grep -oE '[0-9a-f]{32}' | head -1)
+          fi
+          [ -n "$ID" ] || { echo "::error::KV の id が取れませんでした"; exit 1; }
+          sed -e "s|^HEALTH_URL = .*|HEALTH_URL = \"https://$APP.fly.dev/api/health\"|" -e "s|^id = .*|id = \"$ID\"|" wrangler.toml.example > wrangler.toml
+          cat wrangler.toml
+      - name: 置く
+        if: steps.key.outputs.ok == '1'
+        id: dep
+        run: |
+          set -e
+          OUT=$($W deploy 2>&1); echo "$OUT"
+          URL=$(echo "$OUT" | grep -oE 'https://[a-zA-Z0-9.-]+\.workers\.dev' | head -1)
+          [ -n "$URL" ] || { echo "::error::置いた先の住所(workers.dev)が分かりません。Cloudflare の画面で Workers を一度開き、workers.dev の名前を決めてから、もう一度動かしてください"; exit 1; }
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+      - name: 秘密の値を入れて、試しの知らせを送る
+        if: steps.key.outputs.ok == '1'
+        env:
+          URL: ${{ steps.dep.outputs.url }}
+        run: |
+          set -e
+          printf '%s' "$LINE_TOKEN" | $W secret put LINE_TOKEN
+          KEY=$(openssl rand -hex 16); printf '%s' "$KEY" | $W secret put TEST_KEY
+          sleep 5
+          for i in 1 2 3; do
+            R=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "X-Watch-Key: $KEY" "$URL/test"); echo "試しの知らせ: $R"
+            [ "$R" = "200" ] && { echo "LINE に試しの知らせを送りました。届いたか確かめてください"; exit 0; }
+            sleep 10
+          done
+          echo "::error::試しの知らせを送れませんでした(LINE_TOKEN を確かめてください)"; exit 1

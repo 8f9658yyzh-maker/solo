@@ -32,7 +32,7 @@ function createApp(opts) {
     return req.socket.remoteAddress || '';
   };
   // ---- 健康診断(見張りプログラムが5分ごとに見る) ----
-  const mon = { errors500: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
+  const mon = { errors500: [], payErrors: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
   const recent = (arr, ms, now) => arr.filter(t => t > now - ms).length;
   let healthCache = null;
   function health(now = Date.now()) {
@@ -44,6 +44,7 @@ function createApp(opts) {
     const te = recent(tables.tableErrors, 3600000, now); if (te >= 3) alarm.push('tableErrors'); else if (te > 0) warn.push('tableErrors');
     const stuck = tables.stalled(Math.max(tables.opt.graceMs, tables.opt.turnMs) + 120000, now); if (stuck) alarm.push('stalledTables');
     if (mon.uncaught) alarm.push('uncaught');
+    const pe = recent(mon.payErrors, 3600000, now); if (pe >= 3) alarm.push('payment'); else if (pe > 0) warn.push('payment');   // 支払いの知らせ(Stripe)の受け取りの失敗
     let backupAgeMin = null;
     if (mon.lastBackupOk != null) { backupAgeMin = Math.floor((now - mon.lastBackupOk) / 60000); if (backupAgeMin > 360) alarm.push('backup'); else if (backupAgeMin > 120) warn.push('backup'); }
     else if (mon.lastBackupError) alarm.push('backup');
@@ -51,7 +52,7 @@ function createApp(opts) {
     let diskFreePct = null;
     if (mon.dataDir) { try { const f = fs.statfsSync(mon.dataDir); diskFreePct = Math.floor(f.bavail / f.blocks * 100); if (diskFreePct < 10) alarm.push('disk'); else if (diskFreePct < 20) warn.push('disk'); } catch (e) {} }
     const body = { ok: true, ledger: c.ok, level: alarm.length ? 'alarm' : warn.length ? 'warn' : 'ok', alarm, warn,
-      errors500_10m: e500, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
+      errors500_10m: e500, payErrors_1h: pe, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
     healthCache = { at: now, body }; return Object.assign({}, body, live());   // 誰が座っているかは出さない(数だけ)
   }
   const readBody = (req, max = 100000) => new Promise((res, rej) => {
@@ -71,7 +72,8 @@ function createApp(opts) {
     // Stripe からの知らせ: ログイン不要・システム更新中でも受け取る(取りこぼすと、払った人がプランを使えなくなるため)
     if (m === 'POST' && p === '/api/stripe/webhook') {
       const raw = await new Promise((ok, ng) => { let b = ''; req.setEncoding('utf8'); req.on('data', c => { b += c; if (b.length > 500000) { ng(new Err('データが大きすぎます', 413)); req.destroy(); } }); req.on('end', () => ok(b)); });
-      return send(res, 200, await billing.webhook(raw, req.headers['stripe-signature']));
+      try { return send(res, 200, await billing.webhook(raw, req.headers['stripe-signature'])); }
+      catch (e) { if (!/署名がありません/.test(e.message)) { mon.payErrors.push(Date.now()); if (mon.payErrors.length > 1000) mon.payErrors.shift(); console.error('★支払いの知らせ(Stripe)を受け取れません:', e.message); } throw e; }   // 署名つきなのに失敗=鍵の設定違いか処理の失敗。払った人がプランを使えなくなる
     }
     // 写真を送る所(変更の要望・スポンサーの広告)だけ、大きめのデータを受け取る。ほかは 100KB まで
     let body = {}; if (m !== 'GET') body = await readBody(req, p === '/api/requests' || p.startsWith('/api/admin/sponsors') ? 1500000 : 100000);

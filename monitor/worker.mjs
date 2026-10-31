@@ -9,7 +9,7 @@
 //   KV           状態を覚えておく場所(Workers KV)
 //   TEST_KEY     試しの知らせを送るときの合言葉(秘密)
 const WHY = { ledger: 'チップの合計が合いません', errors500: 'サーバーのエラーが続いています', tableErrors: '卓がエラーで止まりました', stalledTables: '動かなくなった卓があります',
-  uncaught: '想定外のエラーが起きました', backup: 'バックアップが取れていません', disk: 'ディスクの空きが少なくなっています' };
+  uncaught: '想定外のエラーが起きました', backup: 'バックアップが取れていません', disk: 'ディスクの空きが少なくなっています', payment: '支払い(Stripe)の知らせを受け取れていません。払った人がプランを使えないおそれ' };
 const H = 3600000;
 
 export async function line(env, text, fetchFn = fetch) {
@@ -41,7 +41,7 @@ export async function check(env, now = Date.now(), fetchFn = fetch) {
     return { ok: true, down: false };
   }
   st.fails = (st.fails || 0) + 1; if (!st.since || !before.fails) st.since = now; st.why = why;
-  if (!st.down && st.fails >= fails) { st.down = true; st.lastAlert = now; await line(env, `⚠️ SOLO に問題があります\n${why}\n${env.HEALTH_URL}\n(直ったら、ここに知らせます)`, fetchFn); }
+  if (!st.down && st.fails >= fails) { st.down = true; st.lastAlert = now; await line(env, `【緊急】⚠️ SOLO に問題があります\n${why}\n${env.HEALTH_URL}\n(直ったら、ここに知らせます)`, fetchFn); }
   else if (st.down && now - (st.lastAlert || 0) >= 6 * H) { st.lastAlert = now; await line(env, `⚠️ SOLO の問題がまだ続いています(約${Math.round((now - st.since) / H)}時間)\n${why}`, fetchFn); }
   await env.KV.put('state', JSON.stringify(st));
   return { ok: false, down: !!st.down, why };
