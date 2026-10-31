@@ -4,6 +4,7 @@ function route() {
   const h = location.hash || '#/home';
   if (!h.startsWith('#/table/') && !h.startsWith('#/practice')) stopTable();
   if (h === '#/setup') return setupScreen();
+  if (h === '#/reset') return resetScreen();
   if (h === '#/login') { authScreen('login'); fetch('/api/setup').then(r => r.json()).then(j => { if (j.needed && location.hash === '#/login') go('#/setup'); }).catch(() => {}); return; }
   if (h === '#/signup') return authScreen('signup');
   if (!S.token) return go('#/login');

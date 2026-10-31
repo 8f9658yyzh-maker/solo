@@ -81,6 +81,7 @@ function authScreen(mode) {
     <label style="display:flex;gap:8px;align-items:flex-start;letter-spacing:0;font-weight:400;font-size:13px;color:var(--soft)"><input id="f_age" type="checkbox" style="width:20px;margin-top:2px;flex:none"><span>18歳以上であり、<a href="/legal/terms" target="_blank" rel="noopener" style="color:#C9A24B">利用規約</a>と<a href="/legal/privacy" target="_blank" rel="noopener" style="color:#C9A24B">プライバシーポリシー</a>に同意します</span></label>` : ''}
     <button class="btn gold block" style="margin-top:16px" data-a="${su ? 'doSignup' : 'doLogin'}">${su ? 'SIGN UP <small>登録する</small>' : 'LOG IN <small>ログイン</small>'}</button>
     <button class="btn block" style="margin-top:8px;border:0;background:none" data-a="goAuth" data-v="${su ? 'login' : 'signup'}">${su ? 'ログインへ' : '招待コードをお持ちの方はこちら'}</button>
+    ${su ? '' : `<button class="btn block" style="margin-top:0;border:0;background:none;font-size:13px;color:var(--mute)" data-a="goAuth" data-v="reset">パスワードを忘れた方(再設定コードをお持ちの方)</button>`}
   </div>
   <p class="mute" style="text-align:center">このゲームのチップは、お金には交換できません。</p>${legalLinks()}</div>`;
 }
@@ -109,7 +110,34 @@ A.doLogin = async () => {
 A.doSignup = async () => {
   if (!$('#f_age').checked) return toast('18歳以上であることへの同意が必要です', true);
   const r = await run(() => api('POST', '/api/signup', { invite: val('f_inv'), username: val('f_user'), password: val('f_pass'), phone: val('f_phone'), age18: true, deviceId: deviceId() })); if (!r) return;
-  toast('登録できました。ログインしてください'); go('#/login');
+  // 登録できたら、同じユーザー名とパスワードでそのままログインする(打ち直しで間違えないように)
+  const l = await run(() => api('POST', '/api/login', { username: val('f_user'), password: val('f_pass'), deviceId: deviceId() }), '登録できました。ようこそ');
+  if (!l) { toast('登録できました。ログインしてください'); return go('#/login'); }
+  S.token = l.token; saveToken(l.token); go('#/home');
+};
+/* パスワードの再設定: 上の立場の人からもらった「再設定コード」で、本人が新しいパスワードを決める */
+function resetScreen() {
+  clearTimers();
+  $('#app').innerHTML = `<div class="auth"><div class="logo"><b>SOLO</b><span>パスワードの再設定</span></div>
+  <div class="card"><h3>RESET<small>新しいパスワードを決める</small></h3>
+    <p class="mute" style="margin-top:0">パスワードを忘れたときは、あなたを招待した人(AJ・管理責任者・統括など)に「再設定コード」を出してもらってください。コードは24時間・1回だけ使えます。</p>
+    <label>再設定コード</label><input id="r_code" autocapitalize="characters" autocomplete="off">
+    <label>ユーザー名</label><input id="r_user" autocomplete="username" autocapitalize="none">
+    <label>新しいパスワード<small>(8文字以上)</small></label><input id="r_pass" type="password" autocomplete="new-password">
+    <button class="btn gold block" style="margin-top:16px" data-a="doReset">パスワードを変える</button>
+    <button class="btn block" style="margin-top:8px;border:0;background:none" data-a="goAuth" data-v="login">ログインへ</button></div>${legalLinks()}</div>`;
+}
+A.doReset = async () => {
+  if (!(await run(() => api('POST', '/api/password/reset', { code: val('r_code'), username: val('r_user'), password: val('r_pass') })))) return;
+  const l = await run(() => api('POST', '/api/login', { username: val('r_user'), password: val('r_pass'), deviceId: deviceId() }), 'パスワードを変えました'); if (!l) return go('#/login');
+  S.token = l.token; saveToken(l.token); go('#/home');
+};
+// 上の立場の人: 再設定コードを出す
+A.pwReset = async v => {
+  const [id, name] = v.split('|');
+  if (!(await askYes(`${name} さんのパスワードの「再設定コード」を出しますか?\n本人がこのコードで新しいパスワードを決めます(あなたにはパスワードは見えません)。前に出したコードは使えなくなります。`, '出す'))) return;
+  const r = await run(() => api('POST', '/api/password-resets', { userId: Number(id) })); if (!r) return;
+  await dlg({ msg: `再設定コード: ${r.code}\n\n${r.username} さんに、このコードとアドレスを送ってください。本人がログイン画面の「パスワードを忘れた方」から、コード・ユーザー名・新しいパスワードを入れます。\n\n使えるのは24時間・1回だけです。`, buttons: [{ label: '閉じる', value: true, cls: 'gold' }] });
 };
 
 /* ---------- 共通の枠(下のタブ) ---------- */
@@ -290,7 +318,7 @@ function inviteCard(roles) {
 A.mkInvite = async () => { const r = await run(() => api('POST', '/api/invites', { role: val('inv_role') })); if (r) $('#inv_out').innerHTML = `<div class="big">${e(r.code)}</div><div class="mute">${ROLE_JA[r.role]}用のコードです。相手に伝えてください。</div>`; };
 function usersCard(users, title, opt) {
   opt = opt || {};
-  return `<div class="card"><h3>${title}</h3>${users.length ? `<table class="t"><tr><th>名前</th><th>立場</th><th class="r">ポケット</th><th></th></tr>${users.map(u => `<tr><td>${e(u.username)}${u.status !== 'active' ? ` <span class="pill red">${u.status === 'watch' ? '監視中' : '退会'}</span>` : ''}<br><span class="mute">${u.parent_name ? '直: ' + e(u.parent_name) : ''}</span></td><td>${ROLE_JA[u.role]}</td><td class="r gold">${fmt(u.balance)}</td><td class="r"><button class="btn sm" data-a="moveUser" data-v="${u.id}|${e(u.username)}">配る/引く</button></td></tr>`).join('')}</table>` : '<p class="mute">まだいません。招待コードで追加します。</p>'}</div>`;
+  return `<div class="card"><h3>${title}</h3>${users.length ? `<table class="t"><tr><th>名前</th><th>立場</th><th class="r">ポケット</th><th></th></tr>${users.map(u => `<tr><td>${e(u.username)}${u.status !== 'active' ? ` <span class="pill red">${u.status === 'watch' ? '監視中' : '退会'}</span>` : ''}<br><span class="mute">${u.parent_name ? '直: ' + e(u.parent_name) : ''}</span></td><td>${ROLE_JA[u.role]}</td><td class="r gold">${fmt(u.balance)}</td><td class="r"><button class="btn sm" data-a="moveUser" data-v="${u.id}|${e(u.username)}">配る/引く</button>${u.role === 'creator' ? '' : `<br><button class="btn sm" style="margin-top:4px" data-a="pwReset" data-v="${u.id}|${e(u.username)}">PW再設定</button>`}</td></tr>`).join('')}</table>` : '<p class="mute">まだいません。招待コードで追加します。</p>'}</div>`;
 }
 A.moveUser = async v => {
   const [id, name] = v.split('|');
@@ -334,7 +362,7 @@ async function adminTab() {
         <button class="btn block" style="margin-top:8px" data-a="reqLimit">卓の上限を上げる申請</button>
         <p class="mute">卓の設定は、誰かが座っている間は変更できません。上限は1ハウス${h.tableLimit}卓です(空の卓も数えます)。</p></div>
       <div id="tblform"></div>
-      <div class="card"><h3>MEMBERS<small>ハウスのメンバー</small></h3><table class="t"><tr><th>名前</th><th class="r">ポケット</th><th></th></tr>${h.members.filter(m => m.id !== me.id).map(m => `<tr><td>${e(m.username)}${m.direct ? ' <span class="pill gold">直</span>' : ' <span class="pill">来訪</span>'}</td><td class="r gold">${m.direct ? fmt(m.balance) : '-'}</td><td class="r">${m.direct ? `<button class="btn sm" data-a="moveUser" data-v="${m.id}|${e(m.username)}">配る/引く</button>` : `<button class="btn sm red" data-a="kick" data-v="${m.id}">外す</button>`}</td></tr>`).join('') || '<tr><td class="mute" colspan=3>まだメンバーがいません</td></tr>'}</table></div>`;
+      <div class="card"><h3>MEMBERS<small>ハウスのメンバー</small></h3><table class="t"><tr><th>名前</th><th class="r">ポケット</th><th></th></tr>${h.members.filter(m => m.id !== me.id).map(m => `<tr><td>${e(m.username)}${m.direct ? ' <span class="pill gold">直</span>' : ' <span class="pill">来訪</span>'}</td><td class="r gold">${m.direct ? fmt(m.balance) : '-'}</td><td class="r">${m.direct ? `<button class="btn sm" data-a="moveUser" data-v="${m.id}|${e(m.username)}">配る/引く</button><br><button class="btn sm" style="margin-top:4px" data-a="pwReset" data-v="${m.id}|${e(m.username)}">PW再設定</button>` : `<button class="btn sm red" data-a="kick" data-v="${m.id}">外す</button>`}</td></tr>`).join('') || '<tr><td class="mute" colspan=3>まだメンバーがいません</td></tr>'}</table></div>`;
     S.timers.push(setInterval(() => { const el = $('#pwt'); if (!el) return; const s = Math.max(0, Math.round((h.expiresAt - Date.now()) / 1000)); el.textContent = s ? `あと ${Math.floor(s / 60)}分${s % 60}秒` : '期限切れ(更新します)'; if (!s) adminTab(); }, 1000));
   } else if (role === 'manager') {
     html += inviteCard(['aj']) + await chipReqCard() + usersCard(users, 'AJ・プレイヤー<small>配る/引き取る(ポケットから配れるのはAJまで)</small>');

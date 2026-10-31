@@ -46,6 +46,33 @@ class Core {
     const hash = u ? await this.hashPwAsync(String(o.password || ''), u.pass_salt) : null;
     return this.login(Object.assign({}, o, { _hash: hash }));
   }
+  // ---- パスワードの再設定: 上の立場の人がコードを出し、本人がそのコードで新しいパスワードを決める(上の人はパスワードを知らないまま) ----
+  createReset(actor, targetId) {
+    const t = this.user(Number(targetId)); need(t, '相手が見つかりません', 404);
+    need(canPull(actor, t), 'この人のパスワードの再設定はできません', 403);   // 誰が誰に触れるかは、チップを引き取れる関係と同じ(上の立場から下へ)
+    need(t.status !== 'banned', '退会処分の人です');
+    const now = Date.now(), code = rand(5).toUpperCase();
+    this.D.tx(() => {
+      this.db.prepare('UPDATE pw_resets SET used_at=? WHERE user_id=? AND used_at IS NULL').run(now, t.id);   // 前に出したコードは使えなくする
+      this.db.prepare('INSERT INTO pw_resets(code,user_id,created_by,created_at,expires_at) VALUES(?,?,?,?,?)').run(code, t.id, actor.id, now, now + 24 * 3600000);
+      this.D.audit(actor.id, 'pw_reset_code', t.id);
+    });
+    return { code, username: t.username, expiresAt: now + 24 * 3600000 };
+  }
+  async resetPasswordAsync({ code, username, password }) {
+    const r = this.db.prepare('SELECT * FROM pw_resets WHERE code=?').get(String(code || '').trim().toUpperCase()), u = this.userByName(String(username || '').trim());
+    need(r && u && r.user_id === u.id && !r.used_at && r.expires_at > Date.now(), '再設定コードかユーザー名が違うか、コードの期限(24時間)が切れています', 400);
+    need(String(password || '').length >= 8, 'パスワードは8文字以上です');
+    const salt = rand(16), hash = await this.hashPwAsync(String(password), salt);
+    this.D.tx(() => {
+      const ok = this.db.prepare('UPDATE pw_resets SET used_at=? WHERE code=? AND used_at IS NULL').run(Date.now(), r.code).changes;
+      need(ok === 1, 'このコードはもう使われています');
+      this.db.prepare('UPDATE users SET pass_hash=?,pass_salt=? WHERE id=?').run(hash, salt, u.id);
+      this.db.prepare('DELETE FROM sessions WHERE user_id=?').run(u.id);   // ほかの端末のログインも切る(盗まれていた場合に備えて)
+      this.D.audit(u.id, 'pw_reset', u.id, { by: r.created_by });
+    });
+    return { ok: true };
+  }
   async signupAsync(o) {
     const salt = rand(16);
     const hash = String(o.password || '').length >= 8 ? await this.hashPwAsync(o.password, salt) : null;

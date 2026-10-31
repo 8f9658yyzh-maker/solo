@@ -76,6 +76,7 @@ function createApp(opts) {
     let body = {}; if (m !== 'GET') body = await readBody(req, p === '/api/requests' || p.startsWith('/api/admin/sponsors') ? 1500000 : 100000);
     // ---- 認証なし ----
     if (m === 'POST' && p === '/api/signup') { need(body.age18 === true, '18歳以上であることへの同意が必要です'); need(!limited('su' + ip, 10, 600000), '登録の試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.signupAsync(Object.assign({}, body, { ip }))); }
+    if (m === 'POST' && p === '/api/password/reset') { need(!limited('pr' + ip, 10, 600000), '試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.resetPasswordAsync(body)); }
     if (m === 'POST' && p === '/api/login') { need(!limited('li' + ip, 20, 600000), 'ログインの試行が多すぎます。しばらく待ってください', 429); return send(res, 200, await core.loginAsync(Object.assign({}, body, { ip }))); }
     if (m === 'GET' && p === '/api/health') return send(res, 200, health());
     // 最初の設定: 作成者がまだいないときだけ、合言葉(SETUP_CODE)を知っている人が作成者を作れる。パスワードをサーバーの設定やチャットに書かずに済む
@@ -123,6 +124,7 @@ function createApp(opts) {
     if (m === 'POST' && p === '/api/chip-requests') { need(!limited('cr' + u.id, 10, 3600000), '申請が多すぎます。しばらく待ってください', 429); return send(res, 200, chipreq.create(u, body.amount, body.note)); }
     if ((mm = p.match(/^\/api\/chip-requests\/(\d+)\/(approve|decline|cancel)$/)) && m === 'POST') return send(res, 200, mm[2] === 'cancel' ? chipreq.cancel(u, Number(mm[1])) : chipreq.decide(u, Number(mm[1]), mm[2] === 'approve', body.reply));
     if (m === 'POST' && p === '/api/invites') return send(res, 200, core.createInvite(u, body.role));
+    if (m === 'POST' && p === '/api/password-resets') { need(!limited('prc' + u.id, 20, 3600000), '操作が多すぎます', 429); return send(res, 200, core.createReset(u, body.userId)); }
     if (m === 'GET' && p === '/api/users') return send(res, 200, core.visibleUsers(u));
     if (m === 'POST' && p === '/api/maintenance') { const v = core.setMaintenance(u, body.on === true, body.msg, body.at); const stopped = v.on ? tables.stopAll() : 0; return send(res, 200, Object.assign({ stopped }, v)); }
     if (m === 'GET' && p === '/api/config') return send(res, 200, core.getConfig(u));
