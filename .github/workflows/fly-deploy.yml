@@ -3,6 +3,8 @@
 # 必要な金庫の値(GitHub → Settings → Secrets and variables → Actions):
 #   FLY_API_TOKEN    Fly.io の合鍵
 #   SOLO_SETUP_CODE  最初の設定(作成者を作る)の合言葉。8文字以上。作成者を作った後は使われない
+#   緊急の知らせ(スマホを鳴らす。どちらか、または両方):
+#     NTFY_TOPIC / NTFY_TOKEN(ntfy。TOKEN はあれば)   PUSHOVER_TOKEN / PUSHOVER_USER(Pushover)
 # 名前を変えたいとき: Variables に FLY_APP(例 solo-club-ishigaki)。なければ solo-club
 name: Fly.io に置く
 on:
@@ -75,6 +77,17 @@ jobs:
           if ! flyctl volumes list -a "$APP" --json | grep -q '"solo_data"'; then
             flyctl volumes create solo_data -a "$APP" --region nrt --size 3 --yes
           fi
+      - name: 緊急の知らせの送り先を本番に入れる(金庫にあるものだけ)
+        if: steps.key.outputs.ok == '1'
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: |
+          ARGS=""
+          for k in NTFY_TOPIC NTFY_TOKEN PUSHOVER_TOKEN PUSHOVER_USER; do v="${!k}"; [ -n "$v" ] && ARGS="$ARGS $k=$v"; done
+          if [ -n "$ARGS" ]; then flyctl secrets set $ARGS -a "$APP" --stage > /dev/null && echo "送り先を入れました"; else echo "::warning::緊急の知らせの送り先が金庫にありません(NTFY_TOPIC か PUSHOVER_TOKEN/PUSHOVER_USER)"; fi
       - name: 最初の設定の合言葉を入れる
         if: steps.key.outputs.ok == '1' && env.SETUP_CODE != ''
         run: flyctl secrets set "SETUP_CODE=$SETUP_CODE" -a "$APP" --stage
@@ -89,13 +102,21 @@ jobs:
             sleep 10
           done
           echo "::error::置いたあと2分たっても健康診断が答えません"; exit 1
-      - name: 失敗・止めたときは LINE で知らせる(LINE_TOKEN が金庫にあるとき)
+      - name: 失敗・止めたときはスマホを鳴らす(送り先が金庫にあるとき)
         if: failure()
         env:
-          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_TOKEN: ${{ secrets.NTFY_TOKEN }}
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
           RUN: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          [ -n "$LINE_TOKEN" ] || { echo "LINE_TOKEN がないので、GitHub からの知らせ(メール)だけです"; exit 0; }
-          MSG="【緊急】SOLO を本番へ置けませんでした(遊んでいる卓があった・試験の失敗など)。理由: $RUN"
-          curl -s -X POST https://api.line.me/v2/bot/message/broadcast -H 'Content-Type: application/json' -H "Authorization: Bearer $LINE_TOKEN" \
-            -d "$(node -e 'console.log(JSON.stringify({messages:[{type:"text",text:process.argv[1]}]}))' "$MSG")"
+          T="【緊急】SOLO: 本番へ置けませんでした"; M="遊んでいる卓があった・試験の失敗など。理由はここ: $RUN"
+          if [ -n "$NTFY_TOPIC" ]; then
+            H=(); [ -n "$NTFY_TOKEN" ] && H=(-H "Authorization: Bearer $NTFY_TOKEN")
+            curl -s "${H[@]}" -H 'Content-Type: application/json' -X POST https://ntfy.sh/ -d "$(node -e 'console.log(JSON.stringify({topic:process.argv[1],title:process.argv[2],message:process.argv[3],priority:5,tags:["rotating_light"]}))' "$NTFY_TOPIC" "$T" "$M")" > /dev/null && echo "ntfy へ送りました"
+          fi
+          if [ -n "$PUSHOVER_TOKEN" ] && [ -n "$PUSHOVER_USER" ]; then
+            curl -s https://api.pushover.net/1/messages.json --form-string "token=$PUSHOVER_TOKEN" --form-string "user=$PUSHOVER_USER" --form-string "title=$T" --form-string "message=$M" --form-string "priority=2" --form-string "retry=30" --form-string "expire=1800" --form-string "sound=siren" > /dev/null && echo "Pushover へ送りました"
+          fi
+          [ -n "$NTFY_TOPIC$PUSHOVER_TOKEN" ] || echo "送り先がないので、GitHub からのメールだけです"

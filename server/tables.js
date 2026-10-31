@@ -647,10 +647,11 @@ class Tables {
   }
   // 起動時の復旧: 中断された卓のチップを、直前のゲーム終了時点のまま、持ち主のポケットに戻す
   recover() {
-    const core = this.core, L = core.L; let n = 0;
+    const core = this.core, L = core.L; let n = 0; this.lastRecover = { tables: 0, chips: 0 };
     for (const t of core.db.prepare("SELECT id FROM tables_ WHERE status IN ('open','running')").all()) {
       const stacks = core.db.prepare("SELECT acct,balance FROM accounts WHERE acct LIKE ? AND balance>0").all('s:' + t.id + ':%');
       const potA = L.balance('p:' + t.id);
+      { const held = stacks.reduce((a, x) => a + x.balance, 0) + potA + L.balance('j:' + t.id); if (held > 0) { this.lastRecover.tables++; this.lastRecover.chips += held; } }   // ゲームの途中で止まった卓(チップが卓に残っていた)
       const jb = L.balance('j:' + t.id);   // 積立: 保存してある積み上げ分に応じてポケットへ(記録がなければ卓の保管へ)
       if (jb > 0) {
         let ent = {}; try { ent = (JSON.parse(core.db.prepare('SELECT state FROM tables_ WHERE id=?').get(t.id).state || '{}').jp) || {}; } catch (e) {}

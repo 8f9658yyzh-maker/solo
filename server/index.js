@@ -3,7 +3,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const D = require('./db'); const { Core, Err, need } = require('./core'); const { Tables, DEFAULTS } = require('./tables'); const { Billing } = require('./billing');
-const { Stats } = require('./stats'); const { Perks } = require('./perks'); const { Ads } = require('./ads'); const { ChipRequests } = require('./chipreq'); const { Legal } = require('./legal');
+const { Stats } = require('./stats'); const { Perks } = require('./perks'); const { Ads } = require('./ads'); const { ChipRequests } = require('./chipreq'); const { Legal } = require('./legal'); const { Notifier } = require('./notify');
 
 function createApp(opts) {
   opts = opts || {};
@@ -14,7 +14,11 @@ function createApp(opts) {
   const ads = new Ads(d, core, billing, opts.ads || opts.billing);   // 広告(地元スポンサー・広告会社)
   const chipreq = new ChipRequests(d, core);   // チップの申請(AJ・管理責任者 → 上の立場)
   const legal = new Legal(d, core, opts.legal || opts.billing);   // 利用規約などのページと同意
-  if (opts.recover !== false) { const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`); }
+  const notifier = opts.notifier || new Notifier({});   // かいとさんのスマホへの緊急の知らせ(設定がなければ何もしない)
+  if (opts.recover !== false) {
+    const n = tables.recover(); if (n) console.log(`[復旧] 中断していた卓${n}件のチップをポケットへ戻しました`);
+    const lr = tables.lastRecover || {}; if (lr.tables) notifier.send('【緊急】SOLO: 遊んでいる途中で本番が止まりました', `再起動しました。途中だった卓 ${lr.tables} 卓のチップ(合計 ${lr.chips})を、止まる直前の数のまま持ち主のポケットへ戻しました。遊んでいた人へのお知らせが必要です。`, { key: 'recover' });
+  }
   const webDir = path.join(__dirname, '..', 'web');
   const trustProxy = !!opts.trustProxy;
   const setupCode = String(opts.setupCode || '').length >= 8 ? String(opts.setupCode) : '';   // 8文字未満の合言葉は使わない(当てられやすいため)
@@ -32,6 +36,7 @@ function createApp(opts) {
     return req.socket.remoteAddress || '';
   };
   // ---- 健康診断(見張りプログラムが5分ごとに見る) ----
+  const WHY = { ledger: 'チップの合計が合いません', errors500: 'サーバーのエラーが続いています', payment: '支払い(Stripe)の知らせを受け取れません。払った人がプランを使えないおそれ', tableErrors: '卓がエラーで止まりました', stalledTables: '動かなくなった卓があります', uncaught: '想定外のエラーが起きました', backup: 'バックアップが取れていません', disk: 'ディスクの空きが少なくなっています' };
   const mon = { errors500: [], payErrors: [], uncaught: 0, lastBackupOk: opts.lastBackupOk || null, lastBackupError: null, backupSameDisk: false, dataDir: opts.dataDir || null };
   const recent = (arr, ms, now) => arr.filter(t => t > now - ms).length;
   let healthCache = null;
@@ -54,6 +59,16 @@ function createApp(opts) {
     const body = { ok: true, ledger: c.ok, level: alarm.length ? 'alarm' : warn.length ? 'warn' : 'ok', alarm, warn,
       errors500_10m: e500, payErrors_1h: pe, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
     healthCache = { at: now, body }; return Object.assign({}, body, live());   // 誰が座っているかは出さない(数だけ)
+  }
+  // 1分ごとに健康診断を見て、警報が新しく出たら鳴る知らせ。続いていれば6時間ごとに念押し。消えたら「戻りました」
+  let alarmed = [];
+  async function alertTick(now = Date.now()) {
+    if (!notifier.on()) return null;
+    const h = health(now), cur = h.alarm || [];
+    for (const k of cur) await notifier.send('【緊急】SOLO: ' + (WHY[k] || k), `本番(${opts.publicUrl || 'solo-club'})で警報が出ています: ${cur.map(x => WHY[x] || x).join('・')}。Claudeに「本番の警報を見て」と伝えてください。`, { key: 'alarm:' + k, gapMs: 6 * 3600000 });
+    if (!cur.length && alarmed.length) await notifier.send('SOLO: 元に戻りました', `警報(${alarmed.map(x => WHY[x] || x).join('・')})が消えました。`, { urgent: false });
+    for (const k of alarmed) if (!cur.includes(k)) notifier.last.delete('alarm:' + k);   // 次に同じ警報が出たら、すぐ鳴らす
+    alarmed = cur.slice(); return cur;
   }
   const readBody = (req, max = 100000) => new Promise((res, rej) => {
     // 上限を超えたら読むのをやめて「大きすぎます」と返す。すぐ切ると利用者には通信エラーに見えるので、上限の5倍までは読み捨ててから返す
@@ -253,13 +268,14 @@ function createApp(opts) {
     return d.db.prepare('DELETE FROM sessions WHERE expires_at<?').run(now).changes;
   };
   const ttimer = setInterval(() => { try { tidy(); } catch (e) { console.error('tidy', e); } }, 600000); if (ttimer.unref) ttimer.unref();
-  return { server, core, tables, d, handler, maintTick, billing, health, mon, tidy, hits, perks, stats, ads, chipreq, legal };
+  return { server, core, tables, d, notifier, alertTick, handler, maintTick, billing, health, mon, tidy, hits, perks, stats, ads, chipreq, legal };
 }
 
 if (require.main === module) {
   const file = process.env.DB_FILE || path.join(__dirname, '..', 'data', 'solo.db');
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const app = createApp({ dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', setupCode: process.env.SETUP_CODE, tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
+  const notifier = new Notifier(process.env);
+  const app = createApp({ notifier, publicUrl: process.env.PUBLIC_URL, dbFile: file, dataDir: path.dirname(file), trustProxy: process.env.TRUST_PROXY === '1', setupCode: process.env.SETUP_CODE, tables: { chatEnabled: process.env.CHAT !== '0' }, billing: process.env });
   if (!app.billing.ready()) console.log('有料プラン: 鍵(STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET / PUBLIC_URL)が未設定なので、申し込みボタンは出ません');
   else console.log('有料プラン: ' + (app.billing.testMode() ? 'テストモード(本物のお金は動きません)' : '★本番モード(本物のお金が動きます)'));
   console.log('広告: ' + (app.ads.client ? '地元スポンサー + Google AdSense(設定の「広告会社」を1にすると出ます)' : '地元スポンサーだけ(ADSENSE_CLIENT が未設定)'));
@@ -288,6 +304,7 @@ if (require.main === module) {
     const busy = () => app.tables.activeCount();
     console.log(`★${sig}: 止める合図を受けました。動いている卓 ${busy()} 卓を、今のゲームの後に閉じます`);
     for (const rt of app.tables.rt.values()) if (rt.status === 'running') { rt.addLog('システム更新のため、このゲームの後に卓を閉じます。チップはポケットに戻ります', 'info'); rt.broadcast(); }
+    if (busy()) app.notifier.send('【緊急】SOLO: 遊んでいる卓があるのに本番を止めています', `動いている卓 ${busy()} 卓を、今のゲームの後に閉じます。チップはポケットに戻ります。遊んでいる人へのお知らせが必要です。`, { key: 'shutdown' });
     app.tables.stopAll();
     const t0 = Date.now(), limit = Number(process.env.SHUTDOWN_WAIT_MS || 100000);
     const iv = setInterval(() => {
@@ -298,6 +315,8 @@ if (require.main === module) {
       process.exit(0);
     }, 300);
   };
+  setInterval(() => { app.alertTick().catch(e => console.error('警報の知らせ', e)); }, 60000).unref();   // 1分ごとに警報を見て、出たらスマホを鳴らす
+  console.log('緊急の知らせ: ' + (notifier.on() ? [notifier.ntfy && 'ntfy', notifier.po && 'Pushover'].filter(Boolean).join(' + ') : '送り先が未設定(NTFY_TOPIC か PUSHOVER_TOKEN/PUSHOVER_USER)'));
   process.on('SIGTERM', () => shutdown('SIGTERM')); process.on('SIGINT', () => shutdown('SIGINT'));
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, () => console.log('ソロ: http://localhost:' + port));
