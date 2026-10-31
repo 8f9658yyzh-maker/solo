@@ -36,7 +36,8 @@ function createApp(opts) {
   const recent = (arr, ms, now) => arr.filter(t => t > now - ms).length;
   let healthCache = null;
   function health(now = Date.now()) {
-    if (healthCache && healthCache.at > now - 15000) return healthCache.body;   // 15秒は同じ答え(何度も開かれても台帳の検査を繰り返さない)
+    const live = () => ({ activeTables: tables.activeCount(), seated: tables.userTable.size, maintenance: !!core.maintenance().on });   // 遊んでいる卓の数は毎回数え直す(公開の前の確かめに使うため)
+    if (healthCache && healthCache.at > now - 15000) return Object.assign({}, healthCache.body, live());   // 15秒は同じ答え(何度も開かれても台帳の検査を繰り返さない)
     const c = core.L.check(), alarm = [], warn = [];
     if (!c.ok) alarm.push('ledger');   // チップの合計が発行量と合わない・マイナスの口座がある
     const e500 = recent(mon.errors500, 600000, now); if (e500 >= 10) alarm.push('errors500'); else if (e500 > 0) warn.push('errors500');
@@ -51,7 +52,7 @@ function createApp(opts) {
     if (mon.dataDir) { try { const f = fs.statfsSync(mon.dataDir); diskFreePct = Math.floor(f.bavail / f.blocks * 100); if (diskFreePct < 10) alarm.push('disk'); else if (diskFreePct < 20) warn.push('disk'); } catch (e) {} }
     const body = { ok: true, ledger: c.ok, level: alarm.length ? 'alarm' : warn.length ? 'warn' : 'ok', alarm, warn,
       errors500_10m: e500, tableErrors_1h: te, stalledTables: stuck, uncaught: mon.uncaught, backupAgeMin, diskFreePct, upMin: Math.floor(process.uptime() / 60) };
-    healthCache = { at: now, body }; return body;
+    healthCache = { at: now, body }; return Object.assign({}, body, live());   // 誰が座っているかは出さない(数だけ)
   }
   const readBody = (req, max = 100000) => new Promise((res, rej) => {
     // 上限を超えたら読むのをやめて「大きすぎます」と返す。すぐ切ると利用者には通信エラーに見えるので、上限の5倍までは読み捨ててから返す
@@ -278,6 +279,24 @@ if (require.main === module) {
   // 想定外の失敗で、全部の卓を巻き込んで落ちないようにする。記録して健康診断を「警報」にし、人が判断する
   process.on('uncaughtException', e => { app.mon.uncaught++; console.error('★想定外のエラー', e); });
   process.on('unhandledRejection', e => { app.mon.uncaught++; console.error('★想定外のエラー(約束の失敗)', e); });
+  // 止める合図(公開・再起動)を受けたら: 新しいゲームを始めず、今のゲームの決着を待って卓を閉じ、チップをポケットへ戻してから終わる
+  let closing = false;
+  const shutdown = sig => {
+    if (closing) return; closing = true;
+    const busy = () => app.tables.activeCount();
+    console.log(`★${sig}: 止める合図を受けました。動いている卓 ${busy()} 卓を、今のゲームの後に閉じます`);
+    for (const rt of app.tables.rt.values()) if (rt.status === 'running') { rt.addLog('システム更新のため、このゲームの後に卓を閉じます。チップはポケットに戻ります', 'info'); rt.broadcast(); }
+    app.tables.stopAll();
+    const t0 = Date.now(), limit = Number(process.env.SHUTDOWN_WAIT_MS || 100000);
+    const iv = setInterval(() => {
+      if (busy() && Date.now() - t0 < limit) return;
+      clearInterval(iv);
+      if (busy()) console.log(`★${Math.round(limit / 1000)}秒待っても終わらない卓が ${busy()} 卓あります。次の起動で、直前の状態のままポケットへ戻します`);
+      try { app.server.close(); } catch (e) {} try { app.d.db.close(); } catch (e) {}
+      process.exit(0);
+    }, 300);
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM')); process.on('SIGINT', () => shutdown('SIGINT'));
   const port = Number(process.env.PORT || 8080);
   app.server.listen(port, () => console.log('ソロ: http://localhost:' + port));
 }

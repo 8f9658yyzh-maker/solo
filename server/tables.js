@@ -634,6 +634,7 @@ class Tables {
     need((actor.role === 'aj' && h && h.id === rt.houseId) || actor.role === 'creator' || actor.role === 'sovereign', 'このハウスのAJだけが止められます', 403);
     rt.stop(); return { stopping: true };
   }
+  activeCount() { let n = 0; for (const rt of this.rt.values()) if (rt.status === 'running') n++; return n; }   // いま動いている卓の数
   stopAll() {   // システム更新のため、動いている卓をすべて止める(今のゲームのあとに終了し、チップはポケットへ戻る)
     let n = 0; for (const r of this.core.db.prepare("SELECT id FROM tables_ WHERE status IN ('open','running')").all()) { const rt = this.get(r.id); if (rt.status === 'running' || rt.count() > 0) { rt.stop(); n++; } } return n;
   }

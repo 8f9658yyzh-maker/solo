@@ -7,6 +7,11 @@
 name: Fly.io に置く
 on:
   workflow_dispatch:
+    inputs:
+      force:
+        description: '遊んでいる卓があっても置く(卓は今のゲームの後に閉じ、チップはポケットへ戻る)'
+        type: boolean
+        default: false
   push:
     branches: [claude/vigilant-johnson-desok1]
     paths: ['server/**', 'web/**', 'engine.js', 'Dockerfile', 'fly.toml', 'package.json', '.github/workflows/fly-deploy.yml']
@@ -34,6 +39,20 @@ jobs:
           else
             echo "ok=1" >> "$GITHUB_OUTPUT"
           fi
+      - name: 遊んでいる卓がないか確かめる(あれば止めて、かいとさんに知らせる)
+        if: steps.key.outputs.ok == '1'
+        env:
+          FORCE: ${{ inputs.force }}
+        run: |
+          H=$(curl -fsS "https://$APP.fly.dev/api/health" || echo '{}')
+          echo "$H"
+          ACT=$(echo "$H" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{let j={};try{j=JSON.parse(s)}catch(e){}console.log((j.activeTables||0)+" "+(j.seated||0)+" "+(j.maintenance?1:0))})')
+          set -- $ACT
+          if [ "$1" -gt 0 ] && [ "$3" != "1" ] && [ "$FORCE" != "true" ]; then
+            echo "::error::いま $1 卓が動いていて、$2 人が座っています。置くと、その卓は今のゲームの後に閉じます。管理画面で「予告を出す」→ システム更新中になってから、Actions の「Run workflow」で置いてください(急ぐときは force に印をつける)"
+            exit 1
+          fi
+          echo "止めてよい状態です(動いている卓 $1 / システム更新中 $3)"
       - uses: actions/setup-node@v4
         if: steps.key.outputs.ok == '1'
         with:
